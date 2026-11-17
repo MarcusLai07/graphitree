@@ -1,0 +1,54 @@
+MIT License + Commons Clause + Attribution
+
+Copyright (c) 2025-2026 Swapnil Kalambe (ShitUI)
+https://shitui.in
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+COMMONS CLAUSE CONDITION
+
+Without limiting other conditions in the License, the grant of rights under the
+License will not include, and does not grant to you, the right to Sell the
+Software.
+
+For purposes of the foregoing, "Sell" means practicing any or all of the rights
+granted to you under the License to provide to third parties, for a fee or other
+consideration (including without limitation the host-or-as-a-service, or
+software-as-a-service that significantly embodies the Software), a product or
+service whose value is primarily derived from or substantially depends upon the
+functionality or source code of the Software.
+
+Permitted Commercial Use:
+A larger work (such as a SaaS application, client website, commercial web product,
+or internal tool) that includes the Software but has substantial independent value
+shall not be considered a product or service whose value is primarily derived from
+or substantially depends upon the Software. You may freely use the Software in
+commercial applications, client projects, and SaaS platforms.
+
+ATTRIBUTION CONDITION
+
+You must provide clear and visible attribution to ShitUI whenever you use,
+distribute, or publicly host components or derivative works based on the
+Software. Attribution must include:
+
+1. A clear mention of "ShitUI"
+2. A direct, accessible link to https://shitui.in
+
+This attribution should be placed in your project's README, documentation,
+credits, or where third-party open-source libraries are customarily acknowledged.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

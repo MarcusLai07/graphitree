@@ -1,0 +1,5 @@
+Aceternity UI's components are used under Aceternity UI's license, which allows them in
+end products that are given away or sold: https://ui.aceternity.com/licence
+
+The compiled Playbook lab inside Graphitree includes them. Their source isn't in this
+repository, since that license doesn't allow sharing it.

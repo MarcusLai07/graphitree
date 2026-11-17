@@ -1,0 +1,32 @@
+# Xcode (the project is generated from project.yml by XcodeGen)
+*.xcodeproj/
+build/
+build.noindex/
+dist/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+
+# macOS
+.DS_Store
+node_modules/
+
+# Our own planning notes and the history bundle, kept off the public repo
+notes/
+
+# Claude Code's local settings and previews
+.claude/
+
+# Aceternity UI's components: its license doesn't allow sharing their source, so they stay on
+# the Mac that builds the lab. The compiled lab in App/Resources includes them. README › Playbook lab.
+playground/src/components/ui/3d-card.tsx
+playground/src/components/ui/aurora-background.tsx
+playground/src/components/ui/background-beams.tsx
+playground/src/components/ui/card-hover-effect.tsx
+playground/src/components/ui/hero-highlight.tsx
+playground/src/components/ui/lamp.tsx
+playground/src/components/ui/moving-border.tsx
+playground/src/components/ui/spotlight-new.tsx
+playground/src/components/ui/text-generate-effect.tsx

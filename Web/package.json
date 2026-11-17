@@ -1,0 +1,16 @@
+{
+  "name": "graphitree-graph",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build": "esbuild src/graph.js --bundle --minify --format=iife --target=safari17 --outfile=../App/Resources/graph.bundle.js"
+  },
+  "dependencies": {
+    "graphology": "0.26.0",
+    "graphology-layout-forceatlas2": "0.10.1",
+    "sigma": "4.0.6"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.0"
+  }
+}

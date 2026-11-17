@@ -1,0 +1,88 @@
+name: Graphitree
+options:
+  bundleIdPrefix: com.marcuslai
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: P7DV5ZUK9A
+    # Sparkle compares CFBundleVersion to find updates, so it follows the version.
+    CURRENT_PROJECT_VERSION: $(MARKETING_VERSION)
+    MARKETING_VERSION: 0.1.2
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    from: 7.0.0
+  # Graphitree › Check for Updates…, from the releases on GitHub (Scripts/release.sh).
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.10.0
+targets:
+  Graphitree:
+    type: application
+    platform: macOS
+    sources: [App, Shared]
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Graphitree
+        CFBundleName: Graphitree
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.developer-tools
+        NSDocumentsFolderUsageDescription: Graphitree reads your knowledge graph and checks its source files in Documents.
+        # Updates: the feed is each GitHub release's appcast.xml, made by Scripts/release.sh and
+        # signed with the private half of this key, which is in the owner's login Keychain.
+        SUFeedURL: https://github.com/MarcusLai07/graphitree/releases/latest/download/appcast.xml
+        SUPublicEDKey: neQwSCpnsCiyBXtzEFWB0oRQ0LsA2AnH2hdcTXoYa1k=
+        SUEnableAutomaticChecks: true
+        SUVerifyUpdateBeforeExtraction: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.marcuslai.Graphitree
+        # App/Resources/AppIcon.icon, made in Icon Composer's format from design/AppIcon (Scripts/icon.sh).
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - package: GRDB
+      - package: Sparkle
+      # The `graphitree` command line ships inside the app, next to its executable.
+      - target: GraphitreeCLI
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables
+  GraphitreeChecks:
+    type: tool
+    platform: macOS
+    sources: [Tests, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.marcuslai.Graphitree.Checks
+    dependencies:
+      - package: GRDB
+  GraphitreeCLI:
+    type: tool
+    platform: macOS
+    sources: [CLI, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.marcuslai.Graphitree.CLI
+        PRODUCT_NAME: graphitree-cli
+    dependencies:
+      - package: GRDB
+  GraphitreeShots:
+    type: tool
+    platform: macOS
+    sources:
+      - path: App
+        excludes: ["GraphitreeApp.swift", "Updates.swift", "Info.plist", "Resources/**"]
+      - Shared
+      - Shots
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.marcuslai.Graphitree.Shots
+    dependencies:
+      - package: GRDB

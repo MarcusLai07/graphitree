@@ -1,0 +1,142 @@
+/*
+ * The bits of Beautiful UI's foundation.css our copies need.
+ *
+ * Their foundation also redefines --accent (as a blue brand colour), --font-sans,
+ * a global :focus-visible outline, a striped body background and a global
+ * reduced-motion kill switch. Pasting it whole into a shadcn app breaks shadcn's
+ * own --accent, so we take only the keyframes and two helper classes, prefix
+ * them with bui-, and map their colour tokens onto shadcn's in the TSX.
+ */
+
+@keyframes bui-shimmer {
+  from {
+    background-position: 150% center;
+  }
+  to {
+    background-position: -50% center;
+  }
+}
+
+@keyframes bui-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes bui-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes bui-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes bui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* pixel-grid loader: brighten plateau, staggered per cell */
+@keyframes bui-pixel-on {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  18%,
+  42% {
+    opacity: 1;
+  }
+  62% {
+    opacity: 0.15;
+  }
+}
+
+@keyframes bui-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Shimmering label. Their version sweeps ink-3 -> ink -> ink-3; ink-3 is too
+ * faint to read (about 2.6:1 on white), so the resting colour here is
+ * muted-foreground. */
+.bui-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 35%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 65%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: bui-shimmer 1.4s linear infinite;
+}
+
+/* StreamText: the newest characters resolve out of a soft blur. */
+.bui-stream-tail {
+  filter: blur(1.6px);
+  -webkit-mask-image: linear-gradient(to right, oklch(0 0 0) 20%, oklch(0 0 0 / 0.2));
+  mask-image: linear-gradient(to right, oklch(0 0 0) 20%, oklch(0 0 0 / 0.2));
+}
+
+.bui-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 1.5px;
+  translate: 0 -0.5px;
+  border-radius: 1px;
+  background: var(--foreground);
+  vertical-align: text-bottom;
+  animation: bui-caret-blink 1s step-end infinite;
+}
+
+.bui-caret.is-streaming {
+  animation: none;
+}
+
+/* Scoped version of their global reduced-motion rule. */
+@media (prefers-reduced-motion: reduce) {
+  [data-bui],
+  [data-bui] *,
+  [data-bui] *::before,
+  [data-bui] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .bui-shimmer {
+    animation: none;
+    background: none;
+    color: var(--muted-foreground);
+  }
+  .bui-stream-tail {
+    filter: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}

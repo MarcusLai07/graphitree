@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- the sprout: the tree above ground, its graph below -->
+  <path d="M512 262 C512 240 512 226 512 206" fill="none" stroke="#5ed6b2" stroke-width="12" stroke-linecap="round"/>
+  <path d="M510 214 C468 214 430 194 412 156 C456 146 494 170 510 214 Z" fill="#5ed6b2"/>
+  <path d="M514 206 C540 168 582 146 630 152 C610 196 566 216 514 206 Z" fill="#5ed6b2"/>
+  <circle cx="512" cy="330" r="74" fill="#f4c96a"/>
+  <circle cx="318" cy="570" r="54" fill="#5ed6b2"/>
+  <circle cx="512" cy="610" r="58" fill="#8f7dff"/>
+  <circle cx="706" cy="566" r="50" fill="#ff6b4a"/>
+  <circle cx="240" cy="742" r="31" fill="#5ed6b2"/>
+  <circle cx="372" cy="774" r="25" fill="#5ed6b2"/>
+  <circle cx="462" cy="796" r="27" fill="#8f7dff"/>
+  <circle cx="566" cy="786" r="33" fill="#8f7dff"/>
+  <circle cx="652" cy="762" r="25" fill="#ff6b4a"/>
+  <circle cx="776" cy="728" r="31" fill="#ff6b4a"/>
+</svg>

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#123236"/>
+      <stop offset="0.55" stop-color="#0a1b1e"/>
+      <stop offset="1" stop-color="#05090b"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.3" r="0.55">
+      <stop offset="0" stop-color="#2a6a68" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#2a6a68" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="jade" cx="0.12" cy="0.95" r="0.5">
+      <stop offset="0" stop-color="#5ed6b2" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#5ed6b2" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="violet" cx="0.9" cy="0.95" r="0.5">
+      <stop offset="0" stop-color="#8f7dff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#8f7dff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ground" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#d9efe9" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#d9efe9" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#d9efe9" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#base)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <rect width="1024" height="1024" fill="url(#jade)"/>
+  <rect width="1024" height="1024" fill="url(#violet)"/>
+  <rect x="150" y="327" width="724" height="6" rx="3" fill="url(#ground)"/>
+</svg>

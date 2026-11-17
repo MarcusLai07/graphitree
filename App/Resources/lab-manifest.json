@@ -1,0 +1,107 @@
+{
+  "libraries": [
+    {
+      "name": "shadcn/ui",
+      "aliases": [],
+      "route": "try/shadcn",
+      "job": "UI components"
+    },
+    {
+      "name": "Base UI",
+      "aliases": [],
+      "route": "try/base-ui",
+      "job": "Headless primitives"
+    },
+    {
+      "name": "Radix",
+      "aliases": [
+        "Radix UI"
+      ],
+      "route": "try/radix",
+      "job": "Headless primitives"
+    },
+    {
+      "name": "cmdk",
+      "aliases": [],
+      "route": "try/cmdk",
+      "job": "Command menu"
+    },
+    {
+      "name": "Sonner",
+      "aliases": [],
+      "route": "try/sonner",
+      "job": "Toasts"
+    },
+    {
+      "name": "Vaul",
+      "aliases": [],
+      "route": "try/vaul",
+      "job": "Drawers"
+    },
+    {
+      "name": "NumberFlow",
+      "aliases": [],
+      "route": "try/numberflow",
+      "job": "Animated numbers"
+    },
+    {
+      "name": "Magic UI",
+      "aliases": [
+        "MagicUI"
+      ],
+      "route": "try/magicui",
+      "job": "Animated UI components"
+    },
+    {
+      "name": "Aceternity UI",
+      "aliases": [
+        "Aceternity"
+      ],
+      "route": "try/aceternity",
+      "job": "Landing page components"
+    },
+    {
+      "name": "Beautiful UI",
+      "aliases": [],
+      "route": "try/beautiful-ui",
+      "job": "AI interface components"
+    },
+    {
+      "name": "21st.dev",
+      "aliases": [],
+      "route": "try/21st",
+      "job": "UI components registry"
+    },
+    {
+      "name": "RareUI",
+      "aliases": [
+        "ShitUI"
+      ],
+      "route": "try/rareui",
+      "job": "Animated UI components"
+    },
+    {
+      "name": "shadcn charts (Recharts)",
+      "aliases": [
+        "Recharts",
+        "shadcn charts"
+      ],
+      "route": "try/shadcn-charts",
+      "job": "Charts"
+    },
+    {
+      "name": "Animate UI",
+      "aliases": [],
+      "route": "try/animate-ui",
+      "job": "Animated UI components"
+    },
+    {
+      "name": "Vercel AI Elements",
+      "aliases": [
+        "AI Elements"
+      ],
+      "route": "try/ai-elements",
+      "job": "AI interface components"
+    }
+  ]
+}
