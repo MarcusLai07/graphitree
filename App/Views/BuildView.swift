@@ -143,7 +143,7 @@ struct BuildView: View {
             Rectangle().fill(Palette.hairline).frame(height: 1)
             Toggle(isOn: Binding(get: { readsDocsThisTime && docs != nil }, set: { readsDocsThisTime = $0 })) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(docs.map { "Also read docs with \($0.name)" } ?? "Also read docs, papers and images")
+                    Text(docs.map { "Also read docs, PDFs and images with \($0.name)" } ?? "Also read docs, PDFs and images")
                     Text(docsDetail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -177,7 +177,7 @@ struct BuildView: View {
 
     private var docsDetail: String {
         guard let docs else { return "No model is connected, so only code is read." }
-        return "Only new and changed files go to the model, \(billing(docs)). It also names new groups."
+        return "Markdown, text and HTML files, PDFs and images: everything that isn't code. Only new and changed ones go to the model, \(billing(docs)). It also names new groups."
     }
 
     private var ignoreChangedSinceBuild: Bool {
@@ -334,7 +334,7 @@ struct BuildView: View {
         var text = "This rewrites graph.json in \(model.outDirectory.path)."
         if allowsSmallerGraph { text += " The check that stops a smaller graph is turned off." }
         if readsDocsThisTime, let docs {
-            text += " Then docs, papers and images graphify hasn't read before go to \(docs.name), \(billing(docs))."
+            text += " Then docs, PDFs and images graphify hasn't read before go to \(docs.name), \(billing(docs))."
             if let estimate = model.docsEstimate {
                 text += estimate.isEmpty ? " Right now there are none." : " " + costSentence(estimate, docs: docs) + "."
             }
@@ -353,7 +353,7 @@ struct BuildView: View {
         case .apiAccount: what = "billed to your API account"
         case .thisMac: what = "on this Mac"
         }
-        return "\(estimate.files.count.formatted()) new or changed file\(estimate.files.count == 1 ? "" : "s"): about \(Self.tokens(cost.totalTokens)) tokens \(what) and \(cost.minutes) minute\(cost.minutes == 1 ? "" : "s")"
+        return "\(estimate.files.count.formatted()) new or changed file\(estimate.files.count == 1 ? "" : "s"): about \(Self.tokens(cost.totalTokens)) tokens \(what) and \(cost.duration)"
     }
 
     static func tokens(_ count: Int) -> String {

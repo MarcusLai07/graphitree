@@ -111,6 +111,18 @@ struct DocsCost: Equatable, Sendable {
         backend == "claude-cli" ? 45_000 : 3_000
     }
 
+    /// graphify runs Claude Code calls one at a time, since parallel CLI sessions trip over each
+    /// other. API backends run up to four at once.
+    static func callsAtOnce(backend: String) -> Int {
+        backend == "claude-cli" ? 1 : 4
+    }
+
+    /// Minutes per call until a pass has been timed. Claude Code runs the person's default model
+    /// and opens each image with a tool call, so a call took over 10 minutes on 2026-11-18.
+    static func minutesPerCall(backend: String) -> Int {
+        backend == "claude-cli" ? 8 : 3
+    }
+
     /// The estimate, scaled by how far past estimates were off for this backend.
     static func estimate(_ estimate: DocsEstimate, backend: String, history: [DocsRun] = []) -> DocsCost {
         guard !estimate.isEmpty else { return DocsCost(inputTokens: 0, outputTokens: 0, minutes: 0) }
@@ -122,10 +134,26 @@ struct DocsCost: Equatable, Sendable {
         let input = Int(Double(rawInput) * scale)
         // Replies run at about a quarter of what's read, going by the 2026-11-12 pass.
         let output = Int(Double(estimate.contentTokens) * 0.28 * scale)
-        // Up to four calls run at once. Each takes a couple of minutes, plus reading time.
-        let calls = Int(ceil(Double(estimate.chunks) / 4))
-        let minutes = max(1, calls * 3 + estimate.contentTokens / 20_000)
+        // Finished passes (graphify printed its token count) set the pace per file. Before any,
+        // calls run in rounds of `callsAtOnce`, plus reading time.
+        let paces = history.filter { $0.backend == backend && $0.actualInput != nil && $0.files > 0 && $0.seconds > 0 }
+            .suffix(5).map { Double($0.seconds) / Double($0.files) }
+        let minutes: Int
+        if paces.isEmpty {
+            let rounds = Int(ceil(Double(estimate.chunks) / Double(callsAtOnce(backend: backend))))
+            minutes = max(1, rounds * minutesPerCall(backend: backend) + estimate.contentTokens / 20_000)
+        } else {
+            let secondsPerFile = paces.sorted()[paces.count / 2]
+            minutes = max(1, Int(ceil(secondsPerFile * Double(estimate.files.count) / 60)))
+        }
         return DocsCost(inputTokens: input, outputTokens: output, minutes: minutes)
+    }
+
+    /// "40 minutes", or "6.5 hours" once it's past an hour and a half.
+    var duration: String {
+        if minutes < 90 { return "\(minutes) minute\(minutes == 1 ? "" : "s")" }
+        let hours = (Double(minutes) / 30).rounded() / 2
+        return hours == hours.rounded() ? "\(Int(hours)) hours" : String(format: "%.1f hours", hours)
     }
 }
 

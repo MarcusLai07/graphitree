@@ -74,6 +74,9 @@ final class GraphRebuilder: @unchecked Sendable {
         guard let docs, update.status == 0, !update.refusedToShrink, !update.cancelled else { return update }
 
         onOutput("\n── Reading new and changed docs with \(docs.name) ──\n")
+        if docs.backend == "claude-cli" {
+            onOutput("\(docs.name) reads one chunk at a time, and a chunk can take 10 minutes or more. graphify prints a line as each one finishes.\n")
+        }
         var last = update
         for (index, step) in docs.steps(root: source.rootPath).enumerated() {
             if index > 0 { onOutput("\n── Naming new groups with \(docs.name) ──\n") }
@@ -112,11 +115,13 @@ final class GraphRebuilder: @unchecked Sendable {
         process.standardError = pipe
 
         let refused = RefusalFlag()
+        let quiet = QuietClock()
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
             let text = String(decoding: data, as: UTF8.self)
             if text.contains("Refusing to overwrite") { refused.set() }
+            quiet.heard()
             onOutput(text)
         }
 
@@ -124,7 +129,17 @@ final class GraphRebuilder: @unchecked Sendable {
         self.process = process
         lock.unlock()
         try process.run()
+        // graphify can go silent for many minutes while a model call runs, which reads as stuck.
+        let heartbeat = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        heartbeat.schedule(deadline: .now() + 60, repeating: 60)
+        heartbeat.setEventHandler {
+            if let minutes = quiet.minutesToReport() {
+                onOutput("[graphitree] still working: nothing new from graphify for \(minutes) min\n")
+            }
+        }
+        heartbeat.resume()
         process.waitUntilExit()
+        heartbeat.cancel()
         pipe.fileHandleForReading.readabilityHandler = nil
 
         lock.lock()
@@ -132,6 +147,36 @@ final class GraphRebuilder: @unchecked Sendable {
         let cancelled = wasCancelled
         lock.unlock()
         return (process.terminationStatus, refused.value, cancelled)
+    }
+
+    /// How long graphify has printed nothing. Says so every few quiet minutes, never for its own lines.
+    final class QuietClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lastHeard: Date
+        private var lastReported = 0
+        private let every: Int
+
+        init(start: Date = .now, every: Int = 3) {
+            lastHeard = start
+            self.every = every
+        }
+
+        func heard(at date: Date = .now) {
+            lock.lock()
+            lastHeard = date
+            lastReported = 0
+            lock.unlock()
+        }
+
+        /// Whole quiet minutes, once per `every` of them.
+        func minutesToReport(at date: Date = .now) -> Int? {
+            lock.lock()
+            defer { lock.unlock() }
+            let minutes = Int(date.timeIntervalSince(lastHeard) / 60)
+            guard minutes >= lastReported + every else { return nil }
+            lastReported = minutes
+            return minutes
+        }
     }
 
     private final class RefusalFlag: @unchecked Sendable {

@@ -105,7 +105,7 @@ struct AgentsView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Palette.gold.opacity(0.9))
             if model.aiOptions.isEmpty {
-                heroLine(BuildChoice.codeOnly, title: "Nothing is connected", detail: "Rebuilds read code only. Connect a model below so docs, papers and images are read too.")
+                heroLine(BuildChoice.codeOnly, title: "Nothing is connected", detail: "Rebuilds read code only. Connect a model below so docs, PDFs and images are read too.")
             } else if let id {
                 HStack(spacing: 12) {
                     ModelLogo(id: id, size: 44, level: health?.level)

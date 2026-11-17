@@ -531,7 +531,7 @@ enum BuildChoice {
     static func docsPass(for id: String, home: String, store: AIProviderStore) -> DocsPass? {
         if let tool = AICatalog.codingTools.first(where: { $0.id == id }), let backend = tool.graphitreeBackend {
             guard ToolLocator.command(tool.commands, home: home) != nil else { return nil }
-            return DocsPass(name: tool.name, backend: backend, model: nil, environment: [:], billing: .plan, module: nil)
+            return DocsPass(name: tool.name, backend: backend, model: nil, environment: Self.environment(forCodingBackend: backend), billing: .plan, module: nil)
         }
         guard let provider = AICatalog.providers.first(where: { $0.id == id }), store.isConfigured(provider) else { return nil }
         let values = store.values(for: provider)
@@ -548,6 +548,13 @@ enum BuildChoice {
             billing: provider.access == .local ? .thisMac : .apiAccount,
             module: provider.module
         )
+    }
+
+    /// graphify gives each call 10 minutes, then throws the work away and retries the chunk in
+    /// halves. A Claude Code call over a chunk heavy with images can need longer than that, so it
+    /// gets 30 minutes: a slow chunk finishes once instead of being paid for again in pieces.
+    static func environment(forCodingBackend backend: String) -> [String: String] {
+        backend == "claude-cli" ? ["GRAPHIFY_API_TIMEOUT": "1800"] : [:]
     }
 }
 
