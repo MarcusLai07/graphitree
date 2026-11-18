@@ -29,6 +29,11 @@ struct MetricDisplay: Identifiable {
 
     var color: Color { usageColor(percent) }
 
+    /// "83% left", for one-line spots that can't style the parts apart.
+    var valueWithUnit: String {
+        unitText.map { "\(valueText) \($0)" } ?? valueText
+    }
+
     private var roundedPace: Int? {
         pace.map { Int(($0).rounded()) }
     }
@@ -116,6 +121,9 @@ struct MetricCaption: View {
     /// Adds "· in 5d" after a reset more than a day away.
     var countdown = false
     var alignment: HorizontalAlignment = .leading
+
+    /// Whether it draws anything.
+    var hasContent: Bool { metric.resetsAt != nil || metric.caption != nil }
 
     var body: some View {
         if let resetsAt = metric.resetsAt {

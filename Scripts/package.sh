@@ -69,7 +69,12 @@ fi
 MOUNT=""
 cleanup() {
   if [[ -n "$MOUNT" ]]; then hdiutil detach -quiet "$MOUNT" 2>/dev/null; rmdir "$MOUNT" 2>/dev/null; fi
-  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$BUILT" 2>/dev/null || true
+  # The widget, too, so it doesn't sit in the widget gallery beside the installed one, and
+  # Sparkle's Updater.app inside, which is registered on its own.
+  pluginkit -r "$BUILT/Contents/PlugIns/GraphitreeWidget.appex" 2>/dev/null || true
+  for bundle in "$BUILT" "$BUILT/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"; do
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$bundle" 2>/dev/null || true
+  done
 }
 trap cleanup EXIT
 
@@ -84,7 +89,9 @@ signature() { codesign -dvv "$1" 2>&1; }
 TEAM=$(signature "$BUILT" | sed -n 's/^TeamIdentifier=//p')
 SIGNER=$(signature "$BUILT" | sed -n 's/^Authority=//p' | head -1)
 [[ -n "$TEAM" && "$TEAM" != "not set" ]] || fail "The app is signed for this Mac only, not with an Apple team, so downloaded copies would ask for permissions again after every update."
-for exe in "$BUILT/Contents/MacOS/Graphitree" "$BUILT/Contents/MacOS/graphitree-cli" "$BUILT/Contents/Frameworks/Sparkle.framework"; do
+WIDGET="$BUILT/Contents/PlugIns/GraphitreeWidget.appex"
+for exe in "$BUILT/Contents/MacOS/Graphitree" "$BUILT/Contents/MacOS/graphitree-cli" "$BUILT/Contents/Frameworks/Sparkle.framework" \
+    "$WIDGET" "$WIDGET/Contents/MacOS/GraphitreeWidget"; do
   name=$(basename "$exe")
   [[ -e "$exe" ]] || fail "$name is missing from the app."
   [[ "$(signature "$exe" | sed -n 's/^TeamIdentifier=//p')" == "$TEAM" ]] || fail "$name isn't signed by the same team as the app."
@@ -107,6 +114,22 @@ while IFS= read -r exe; do
 done < <(find "$BUILT" -type f -perm -u+x)
 
 info() { /usr/libexec/PlistBuddy -c "Print :$1" "$BUILT/Contents/Info.plist" 2>/dev/null; }
+# A development provisioning profile lists the Macs it runs on, so a copy carrying one wouldn't
+# open anywhere else. Nothing here needs one: the app group starts with the team ID.
+PROFILES=$(find "$BUILT" -name embedded.provisionprofile)
+[[ -z "$PROFILES" ]] || fail "The app carries a provisioning profile (${PROFILES#"$BUILT/"}), so it would only open on this team's registered Macs."
+# The widget: macOS loads it only sandboxed, and it finds the app's readings only in the folder
+# both name, which has to start with the team ID or macOS asks before every read.
+GROUP=$(info GraphitreeAppGroup)
+[[ "$GROUP" == "$TEAM."* ]] || fail "The app group, $GROUP, doesn't start with the team ID $TEAM."
+[[ "$(/usr/libexec/PlistBuddy -c "Print :GraphitreeAppGroup" "$WIDGET/Contents/Info.plist" 2>/dev/null)" == "$GROUP" ]] \
+  || fail "The widget names a different app group from the app's."
+codesign -d --entitlements - --xml "$WIDGET" 2>/dev/null | grep -q "com.apple.security.app-sandbox" \
+  || fail "The widget isn't sandboxed, so macOS won't load it."
+for part in "$BUILT" "$WIDGET"; do
+  codesign -d --entitlements - --xml "$part" 2>/dev/null | grep -q ">$GROUP<" \
+    || fail "$(basename "$part") isn't entitled to the app group $GROUP."
+done
 VERSION=$(info CFBundleShortVersionString)
 # Sparkle offers an update when the feed's build number is higher than this copy's.
 [[ "$(info CFBundleVersion)" == "$VERSION" ]] || fail "The build number, $(info CFBundleVersion), isn't the version, $VERSION. See CURRENT_PROJECT_VERSION in project.yml."

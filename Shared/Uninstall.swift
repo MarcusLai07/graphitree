@@ -99,6 +99,16 @@ struct UninstallPlan: Equatable, Sendable {
             "Saved Application State/\(bundleIdentifier).savedState",
         ].map { library.appendingPathComponent($0) }
         trash.append(URL(fileURLWithPath: UpdateAgent.logPath(home: home)))
+        // "Open at login". Not stopped with launchctl like the update job: the job that started
+        // this Graphitree would quit it mid-uninstall.
+        trash.append(MenuBarAgent.plistURL(home: home))
+        // The folder Graphitree shares with its widget, named after whichever team signed it.
+        let groups = library.appendingPathComponent("Group Containers")
+        for name in ((try? manager.contentsOfDirectory(atPath: groups.path)) ?? []).sorted() where name.hasSuffix(".\(bundleIdentifier)") {
+            trash.append(groups.appendingPathComponent(name))
+        }
+        // The widget's own sandbox folder, which macOS makes the first time it draws.
+        trash.append(library.appendingPathComponent("Containers/\(bundleIdentifier).Widget"))
         trash.append(appURL)
         trash = trash.filter { exists($0.path) }
 

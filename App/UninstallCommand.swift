@@ -33,6 +33,7 @@ enum UninstallCommand {
 
         model.stopChat()
         UsageRefresher.shared.stop()
+        UsageFeed.shared.stop()
         let problems = Uninstaller.perform(plan)
         if !problems.isEmpty {
             let report = NSAlert()

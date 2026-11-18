@@ -34,6 +34,11 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.appBecameActive()
         }
+        // The menu bar, widgets and notifications ask for the Usage page through the router.
+        .onReceive(AppRouter.shared.$pending.compactMap { $0 }) { _ in
+            route(AppRouter.shared.take())
+        }
+        .background(WindowReader { MainWindow.current = $0 })
         .preferredColorScheme(.dark)
         .tint(Palette.gold)
         .fileImporter(isPresented: $isChoosingFolder, allowedContentTypes: [.folder]) { result in
@@ -46,6 +51,19 @@ struct RootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.errorMessage ?? "")
+        }
+    }
+
+    private func route(_ request: AppRouter.Request?) {
+        switch request {
+        case .usage(let provider)?:
+            if let provider { UserDefaults.standard.set(provider.rawValue, forKey: ClaudeUsageStore.Key.provider) }
+            panel = .usage
+        case .usageSettings?:
+            panel = .usage
+            AppRouter.shared.showsUsageSettings = true
+        case .window?, nil:
+            break
         }
     }
 

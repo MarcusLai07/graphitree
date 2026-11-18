@@ -11,7 +11,7 @@ settings:
     DEVELOPMENT_TEAM: P7DV5ZUK9A
     # Sparkle compares CFBundleVersion to find updates, so it follows the version.
     CURRENT_PROJECT_VERSION: $(MARKETING_VERSION)
-    MARKETING_VERSION: 0.1.3
+    MARKETING_VERSION: 0.2.0
 packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift
@@ -40,6 +40,20 @@ targets:
         SUPublicEDKey: neQwSCpnsCiyBXtzEFWB0oRQ0LsA2AnH2hdcTXoYa1k=
         SUEnableAutomaticChecks: true
         SUVerifyUpdateBeforeExtraction: true
+        # The folder shared with the widget (WidgetFeedStore). Team-prefixed, so macOS lets both
+        # use it without a provisioning profile or a prompt; another team's build uses its own.
+        GraphitreeAppGroup: $(TeamIdentifierPrefix)com.marcuslai.Graphitree
+        # Widgets and notifications open graphitree://usage?plan=claude.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.marcuslai.Graphitree
+            CFBundleURLSchemes: [graphitree]
+    # Not sandboxed: it reads ~/Documents/GitHub and runs graphify. Its one entitlement is the
+    # folder it shares with the widget.
+    entitlements:
+      path: App/Graphitree.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - $(TeamIdentifierPrefix)com.marcuslai.Graphitree
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.marcuslai.Graphitree
@@ -48,12 +62,56 @@ targets:
     dependencies:
       - package: GRDB
       - package: Sparkle
+      # The desktop widgets, in Contents/PlugIns.
+      - target: GraphitreeWidget
       # The `graphitree` command line ships inside the app, next to its executable.
       - target: GraphitreeCLI
         embed: true
         codeSign: true
         copy:
           destination: executables
+  # The desktop widgets: the plan's limits as bars or rings. Widgets must be sandboxed, so this
+  # only draws the feed Graphitree writes into their shared folder (Shared/Usage/WidgetFeed.swift),
+  # and compiles just the usage files that drawing needs.
+  GraphitreeWidget:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Widget
+        excludes: ["Info.plist", "GraphitreeWidget.entitlements"]
+      - App/Views/Palette.swift
+      - App/Views/Usage/UsageTheme.swift
+      - App/Views/Usage/MetricPresentation.swift
+      - App/Views/Usage/Meters.swift
+      - Shared/Usage/UsageModels.swift
+      - Shared/Usage/UsageProvider.swift
+      - Shared/Usage/UsageTrends.swift
+      - Shared/Usage/UsageHistory.swift
+      - Shared/Usage/ClaudeUsageStore.swift
+      - Shared/Usage/WidgetFeed.swift
+      - path: App/Resources/ModelLogos/ModelLogo-claude-code.png
+        buildPhase: resources
+      - path: App/Resources/ModelLogos/ModelLogo-codex.png
+        buildPhase: resources
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: Graphitree
+        CFBundleName: Graphitree
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        GraphitreeAppGroup: $(TeamIdentifierPrefix)com.marcuslai.Graphitree
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Widget/GraphitreeWidget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups:
+          - $(TeamIdentifierPrefix)com.marcuslai.Graphitree
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.marcuslai.Graphitree.Widget
   GraphitreeChecks:
     type: tool
     platform: macOS
@@ -81,6 +139,9 @@ targets:
         excludes: ["GraphitreeApp.swift", "Updates.swift", "Info.plist", "Resources/**"]
       - Shared
       - Shots
+      # The widgets' views, drawn with sample entries (Shots/WidgetShot.swift).
+      - path: Widget
+        excludes: ["WidgetBundle.swift", "Info.plist", "GraphitreeWidget.entitlements"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.marcuslai.Graphitree.Shots

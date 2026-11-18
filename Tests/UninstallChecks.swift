@@ -52,6 +52,11 @@ func uninstallChecks() throws {
     try manager.createSymbolicLink(atPath: link, withDestinationPath: "/Applications/Graphitree.app/Contents/MacOS/graphitree-cli")
     let graphify = try write(".local/bin/graphify", "#!/bin/sh\n")
     let job = try write("Library/LaunchAgents/\(UpdateAgent.label).plist", "<plist/>")
+    let loginJob = try write("Library/LaunchAgents/\(MenuBarAgent.label).plist", "<plist/>")
+    let widgetFolder = (try write("Library/Group Containers/ABCDE12345.com.marcuslai.Graphitree/widget-feed.json", "{}") as NSString).deletingLastPathComponent
+    let otherGroup = (try write("Library/Group Containers/ABCDE12345.com.marcuslai.ClaudeUsage/usage-history.jsonl", "") as NSString).deletingLastPathComponent
+    let widgetContainer = (try write("Library/Containers/com.marcuslai.Graphitree.Widget/.com.apple.containermanagerd.metadata.plist", "") as NSString)
+        .deletingLastPathComponent
     let log = try write("Library/Logs/Graphitree-update.log", "ran")
     let prefs = try write("Library/Preferences/com.marcuslai.Graphitree.plist", "settings")
     try write("Library/Application Support/Graphitree/Chats/chat.json", "{}")
@@ -73,6 +78,10 @@ func uninstallChecks() throws {
     expectEqual(plan.preferenceDomains, ["com.marcuslai.Graphitree"], "only Graphitree's settings are emptied")
     let trashed = Set(plan.trash.map(\.path))
     check([job, log, prefs, support.path, caches.path, app.path].allSatisfy(trashed.contains), "the app, its job, log, settings, support folder and caches go to the Trash")
+    check(trashed.contains(loginJob), "the open-at-login job goes to the Trash")
+    check(trashed.contains(widgetFolder), "the folder shared with the widget goes, whichever team signed it")
+    check(!trashed.contains(otherGroup), "another app's group folder stays")
+    check(trashed.contains(widgetContainer), "the widget's sandbox folder goes too")
     expectEqual(plan.trash.last, app, "the app goes last")
     check(!trashed.contains(graphFolder) && !trashed.contains(graphify), "the graph folder and graphify stay")
     expectEqual(plan.backupCopies.map(\.lastPathComponent), ["CLAUDE.md.graphitree-backup-2026-11-11", "CLAUDE.md.graphitree-backup-2026-11-15"], "the copies Graphitree left beside a file go too, and nothing else there")
@@ -121,6 +130,8 @@ func uninstallChecks() throws {
     expectEqual(trashOrder.first, Uninstaller.copiesFolderName, "the copies go to the Trash first")
     expectEqual(trashOrder.last, "Graphitree.app", "the app goes to the Trash last")
     check(ran.contains(["/bin/launchctl", "bootout", "gui/\(getuid())/\(UpdateAgent.label)"]), "the background job is booted out")
+    check(!ran.contains { $0.contains { $0.hasSuffix(MenuBarAgent.label) } }, "the login job isn't booted out, which would quit the Graphitree it started mid-uninstall")
+    check(!exists(loginJob) && !exists(widgetFolder) && exists(otherGroup), "the login job and the widget's folder left their places, and another app's folder stayed")
     expectEqual(ran.filter { $0.first == "/usr/bin/tccutil" }, [["/usr/bin/tccutil", "reset", "All", "com.marcuslai.Graphitree"]], "the app's permissions are reset")
     expectEqual(deletedKeyServices, [], "no keys, no Keychain change")
     expectEqual(emptied, ["com.marcuslai.Graphitree"], "Graphitree's settings are emptied")

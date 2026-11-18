@@ -23,6 +23,7 @@ struct UsageView: View {
     @ObservedObject private var codexTrends = TrendModel.codex
     @ObservedObject private var claudeAnalytics = AnalyticsModel.claude
     @ObservedObject private var codexAnalytics = AnalyticsModel.codex
+    @ObservedObject private var router = AppRouter.shared
 
     @AppStorage(ClaudeUsageStore.Key.provider) private var provider: UsageProvider = .claude
     @AppStorage(ClaudeUsageStore.Key.showLeft) private var showLeft = false
@@ -70,7 +71,17 @@ struct UsageView: View {
     var body: some View {
         VStack(spacing: 0) {
             PanelHeader(title: "Usage", subtitle: subtitle) {
-                providerSwitch
+                HStack(spacing: 10) {
+                    Button {
+                        router.showsUsageSettings = true
+                    } label: {
+                        Label("Menu Bar & Alerts", systemImage: "menubar.rectangle")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(SoftButtonStyle())
+                    .help("The menu bar item, desktop widgets and notifications")
+                    providerSwitch
+                }
             }
             Rectangle().fill(Palette.hairline).frame(height: 1)
             toolbar
@@ -90,6 +101,9 @@ struct UsageView: View {
             if new == .claude { refresher.start() }
         }
         .task(id: reloadKey) { await keepCurrent() }
+        .sheet(isPresented: $router.showsUsageSettings) {
+            UsageSettingsView()
+        }
     }
 
     /// Claude: each reading may have added a history sample, and Claude Code new transcript lines.

@@ -45,10 +45,10 @@ Choose **Graphitree › Uninstall Graphitree…**. It lists what it removes and 
 It removes:
 
 - Graphitree's lines in your AI tools' instructions files, and its MCP server in chat apps. A copy of each file as it was goes to the Trash.
-- The `graphitree` command link and the background job.
+- The `graphitree` command link, the background job, and the open-at-login job.
 - Its AI keys in the Keychain. These can't be put back.
 - Its Privacy & Security permissions. macOS doesn't let it reset the `graphitree` command's own Documents access, which the background job asks for, so if you turned that job on, check System Settings › Privacy & Security › Files & Folders afterwards.
-- The app, its settings, Application Support folder, caches and logs, and the backup copies it made of other tools' files. All of these go to the Trash.
+- The app, its settings, Application Support folder, the folder it shares with its widgets and the widgets' own sandbox folder, caches and logs, and the backup copies it made of other tools' files. All of these go to the Trash.
 
 It keeps your graph folder with your Playbook, graphify, and any Playbook lines in your repos, which are part of each repo. If Graphitree installed graphify for you, the list says so. `uv tool uninstall graphifyy` removes it. `Shared/Uninstall.swift` has the full list.
 
@@ -66,7 +66,10 @@ A downloaded copy is removed from wherever it is, Downloads included. The disk i
 | `~/.claude/projects`, `~/Library/Application Support/Claude/local-agent-mode-sessions` | Claude Code, Claude Desktop | Read only, by the Usage page, to count Claude Code's calls on this Mac. |
 | `~/.codex/sessions`, `~/.codex/archived_sessions` | Codex | Read only, by the Usage page, for Codex's calls and its plan's limits. Compressed logs (`.jsonl.zst`) are read with Homebrew's `zstd` when it's installed. |
 | Keychain item `Claude Code-credentials` | Claude Code | Read only, by the Usage page, to ask Anthropic for the plan's limits. Never refreshed or changed, so it can't sign Claude Code out. |
-| `~/Library/Application Support/Graphitree/ClaudeUsage` | The app | The last plan reading, a reading every 5 minutes while the app is open (`usage-history.jsonl`), and a disposable transcript cache. |
+| `~/Library/Application Support/Graphitree/ClaudeUsage` | The app | The last plan reading, a reading every 5 minutes while the app runs (`usage-history.jsonl`), and a disposable transcript cache. |
+| `~/Library/Group Containers/<team>.com.marcuslai.Graphitree/widget-feed.json` | The app | The latest readings, for the desktop widgets, rewritten after each reading. The widgets only read it. |
+| `~/Library/LaunchAgents/com.marcuslai.Graphitree.menubar.plist` | The app | Only with Open at login on. Starts Graphitree in the menu bar when you log in. |
+| Claude Usage's `usage-history.jsonl`, in its group folder | Claude Usage | Read only when you choose Import History from Claude Usage. macOS asks first. |
 
 To query the cleaned graph: `graphify query "<question>" --graph graphify-out/graph.clean.json`
 
@@ -98,6 +101,15 @@ The Usage page, under AI Models in the rail, is ported from [Claude Usage](https
 **Codex**
 - Everything comes from Codex's own session logs, so there's no sign-in, keychain or network. Each reply logs the plan's 5-hour and weekly limits (`rate_limits` on `token_count`), so the limits are as of Codex's last reply and the left-over-time chart is drawn from the logs themselves. Signed in with an API key, Codex has no plan limits.
 - Calls come from `token_usage_record` lines (one per response, newer Codex) or else `token_count` events, counted once even when a forked session repeats them. Cost is at OpenAI API list prices, long-context rates included. The format follows Codex's source (openai/codex, `codex-rs/protocol` and `codex-rs/history`).
+
+**Menu bar, widgets and notifications**
+
+The Usage page's **Menu Bar & Alerts** button sets these up.
+
+- **Menu bar**: Graphitree's mark with Session over Weekly beside it, for Claude or Codex. Its menu shows each plan's limits, resets and pace. While it's on, Graphitree keeps running when you close its window and leaves the Dock until you open it again; quit it from the menu. **Open at login** starts it in the menu bar only.
+- **Desktop widgets**: Plan Limits as bars or rings, small, medium or large, for Claude or Codex (edit the widget to pick). The large bars add the week's left-over-time curve. macOS requires widgets to be sandboxed, which keeps Claude Code's sign-in and Codex's logs out of their reach, so Graphitree writes its readings to a folder it shares with them and they draw that. They're as current as Graphitree's last reading; when Graphitree isn't running they say so.
+- **Notifications**: when a window passes the share you set (80% to start), when one reaches its limit, when the week is on pace to run out more than six hours early, and when the week is about to reset with much of it unused. Each comes once per cycle, and clicking it opens the Usage page.
+- **Moving from Claude Usage**: Import History from Claude Usage adds its readings to Graphitree's, so the left-over-time chart and past weeks carry on.
 
 ## Credits
 
@@ -137,7 +149,7 @@ You need Xcode (the app) and XcodeGen (`brew install xcodegen`).
 Scripts/install.sh --launch
 ```
 
-This builds a Release copy, installs it as `/Applications/Graphitree.app` and opens it. Without `--launch` it never opens Graphitree or quits a running one. If you aren't signed in to the project's Apple team, add `--sign-locally`, or put `DEVELOPMENT_TEAM=<your team ID>` in front. `Scripts/install.sh --help` lists every option.
+This builds a Release copy, installs it as `/Applications/Graphitree.app` and opens it. Without `--launch` it never opens Graphitree or quits a running one. If you aren't signed in to the project's Apple team, add `--sign-locally`, or put `DEVELOPMENT_TEAM=<your team ID>` in front. A copy signed with `--sign-locally` has no team, so its widgets have no shared folder and show nothing; the menu bar and notifications still work. `Scripts/install.sh --help` lists every option.
 
 To work on it in Xcode:
 
@@ -217,3 +229,5 @@ cd playground && npm install && npm run build:app
 ### Usage page
 
 The engine is in `Shared/Usage/` (Codex's reader is `CodexSessions.swift`) and the views are in `App/Views/Usage/`. `Tests/UsageChecks.swift` and `Tests/CodexChecks.swift` cover both. `Scripts/shot.sh usage out.png -usageTab requests` renders a tab from the last stored reading, without asking the keychain; add `-usage.provider codex -codexHome <folder>` to render Codex from another folder.
+
+The menu bar is in `App/MenuBar/`: `UsageFeed.swift` keeps both plans read while the app runs and writes the widgets' feed (`Shared/Usage/WidgetFeed.swift`), and `AlertSender.swift` sends what `Shared/Usage/UsageAlerts.swift` finds due. The widget extension is `Widget/`, which compiles only the usage files its drawing needs (see `GraphitreeWidget` in `project.yml`). Its app group is `<team ID>.com.marcuslai.Graphitree`, which macOS lets both use without a provisioning profile; `Scripts/package.sh` fails if a profile ends up in the app. `Tests/WidgetChecks.swift` covers the feed, the notification rules, the login job and the history import. `Scripts/shot.sh widgets <folder>/` draws the menu bar, its menu and every widget size from the last stored reading (`-sample YES` for made-up figures, `-plan codex`, `-showLeft YES`), and `Scripts/shot.sh usagesettings out.png` the settings sheet.

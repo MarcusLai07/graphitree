@@ -92,6 +92,14 @@ enum CodexSessions {
         return scan
     }
 
+    /// Whether Codex has written a log since `since`. Its limits change only when it runs, so the
+    /// menu bar reads them again only then.
+    static func hasChanges(home: URL = home, since: Date) -> Bool {
+        let roots = ["sessions", "archived_sessions"].map { home.appendingPathComponent($0) }
+        return ClaudeTranscripts.files(under: roots, modifiedSince: since).contains { $0.url.lastPathComponent.hasPrefix("rollout-") }
+            || !compressedFiles(under: roots, modifiedSince: since).isEmpty
+    }
+
     /// `.jsonl.zst` logs: Codex can compress logs a week old (an optional feature, off by default).
     private static func compressedFiles(under roots: [URL], modifiedSince since: Date) -> [ClaudeTranscripts.File] {
         var files: [ClaudeTranscripts.File] = []

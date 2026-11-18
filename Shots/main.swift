@@ -44,7 +44,7 @@ func shoot() async throws {
         throw ShotError(message: "usage: GraphitreeShots <window|firstrun|build|folders|playbook|agents|browse> <out.png> [-key value …]")
     }
     let panel: ShellPanel
-    if arguments[1] == "move" || arguments[1] == "newfolder" || arguments[1] == "labels" {
+    if arguments[1] == "move" || arguments[1] == "newfolder" || arguments[1] == "labels" || arguments[1] == "usagesettings" {
         try await shootSheet(arguments[1], output: URL(fileURLWithPath: arguments[2]))
         return
     }
@@ -54,6 +54,11 @@ func shoot() async throws {
     }
     if arguments[1] == "firstrun" {
         try await shootFirstRun(output: URL(fileURLWithPath: arguments[2]))
+        return
+    }
+    if arguments[1] == "widgets" {
+        // The menu bar's label and popover, and every widget size (see Shots/WidgetShot.swift).
+        try await shootWidgets(folder: URL(fileURLWithPath: arguments[2], isDirectory: true))
         return
     }
     if arguments[1] == "lab" {
@@ -198,7 +203,9 @@ func shootSheet(_ kind: String, output: URL) async throws {
     let model = AppModel()
     let settle = defaults.double(forKey: "settle") > 0 ? defaults.double(forKey: "settle") : 8
     let view: AnyView
-    if kind == "labels" {
+    if kind == "usagesettings" {
+        view = AnyView(UsageSettingsView())
+    } else if kind == "labels" {
         let map = model.folderMap()
         view = AnyView(LabelsSheet(kinds: map?.kinds ?? FolderPurpose.defaults, uses: { kind in map?.folders.filter { $0.purpose == kind }.count ?? 0 }) { _ in })
     } else if kind == "move" {
@@ -210,7 +217,8 @@ func shootSheet(_ kind: String, output: URL) async throws {
         view = AnyView(NewFolderSheet(initialName: defaults.string(forKey: "folderName") ?? "", initialRule: defaults.string(forKey: "folderRule") ?? "") { _ in })
     }
     let height = defaults.double(forKey: "height") > 0 ? defaults.double(forKey: "height") : 720
-    let size = NSSize(width: kind == "move" ? 540 : (kind == "labels" ? 680 : 500), height: kind == "labels" ? 520 : height)
+    let size = NSSize(width: kind == "move" || kind == "usagesettings" ? 540 : (kind == "labels" ? 680 : 500),
+                      height: kind == "labels" ? 520 : (kind == "usagesettings" ? 640 : height))
     let root = view
         .environment(model)
         .frame(width: size.width, height: size.height, alignment: .top)
@@ -235,6 +243,11 @@ func shootSheet(_ kind: String, output: URL) async throws {
 // The tool has no bundle, so the AI models' logos come from the repo (shot.sh runs from its root).
 MainActor.assumeIsolated {
     ModelBrand.logoFolder = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("App/Resources/ModelLogos")
+    ProviderMark.folder = ModelBrand.logoFolder
+    // Never reads, writes the widgets' feed, or notifies.
+    UsageFeed.isEnabled = false
+    CodexLimits.readsLogs = false
+    UsageRefresher.readsLimits = false
 }
 
 // Read Graphitree's own settings, such as which graph is open. Writes stay in this tool's domain.

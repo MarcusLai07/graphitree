@@ -51,7 +51,9 @@ fi
 # after each new build.
 SIGNING=()
 if [[ $SIGN_LOCALLY -eq 1 ]]; then
-  SIGNING=(CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=)
+  # Without a team there's no app group to share with the widget, so no entitlements: the app
+  # works without them, and the widget shows nothing.
+  SIGNING=(CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS=)
 elif [[ -n "${DEVELOPMENT_TEAM:-}" ]]; then
   SIGNING=("DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM")
 fi
@@ -76,7 +78,7 @@ codesign --verify --deep --strict "$BUILT"
 
 if pgrep -x Graphitree >/dev/null; then
   if [[ $RESTART -eq 0 ]]; then
-    echo "Graphitree is open, so it wasn't replaced. Quit it and run this again, or pass --restart."
+    echo "Graphitree is open, so it wasn't replaced. Quit it (from its menu bar item when the window is closed) and run this again, or pass --restart."
     exit 0
   fi
   /usr/bin/osascript -e 'tell application id "com.marcuslai.Graphitree" to quit' 2>/dev/null || true
@@ -89,6 +91,13 @@ fi
 
 rm -rf "$APP"
 ditto "$BUILT" "$APP"
+# Xcode registers the copy it builds with Launch Services. Left registered, its widget would show
+# in the widget gallery beside the installed one, and graphitree:// links could open it.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+pluginkit -r "$BUILT/Contents/PlugIns/GraphitreeWidget.appex" 2>/dev/null || true
+"$LSREGISTER" -u "$BUILT" 2>/dev/null || true
+"$LSREGISTER" -u "$BUILT/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" 2>/dev/null || true
+"$LSREGISTER" -f "$APP" 2>/dev/null || true
 echo "Installed $APP"
 if [[ $LAUNCH -eq 1 ]]; then
   open "$APP"
