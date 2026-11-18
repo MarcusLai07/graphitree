@@ -45,6 +45,13 @@ enum MenuBarIcon {
         return [snapshot.session, snapshot.weekly].compactMap { $0.map { "\(figure($0, showLeft: showLeft))%" } }
     }
 
+    /// Another tool's first two windows, as used or left.
+    static func figures(_ windows: [LimitWindow], showLeft: Bool) -> [String] {
+        windows.prefix(2).compactMap { window in
+            window.utilization.map { "\(figure(UsageWindow(utilization: $0, resetsAt: window.resetsAt), showLeft: showLeft))%" }
+        }
+    }
+
     /// One window's whole percent used or left, as `MetricPresentation` shows it.
     static func figure(_ window: UsageWindow, showLeft: Bool) -> Int {
         let used = Int(window.utilization ?? 0)

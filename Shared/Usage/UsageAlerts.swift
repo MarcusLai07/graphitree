@@ -112,6 +112,35 @@ enum UsageAlerts {
         return alerts
     }
 
+    /// The alerts due for a tool that reports `LimitReading` windows: each window past the share
+    /// set for the weekly limit, or at its limit. The pace and the reset reminder need a history
+    /// these tools don't keep, so they're left out.
+    static func due(_ provider: UsageProvider, reading: LimitReading, settings: Settings, notified: [String], now: Date) -> [Alert] {
+        guard settings.isOn else { return [] }
+        var alerts: [Alert] = []
+        for window in reading.windows {
+            guard let used = window.utilization else { continue }
+            let alert: String
+            let title: String
+            let body: String
+            if settings.limitReached, used >= 100 {
+                alert = "\(window.id)-limit"
+                title = "\(provider.name) \(window.title) limit reached"
+                body = resetText(window.resetsAt, prefix: "Usage is at 100%.", now: now)
+            } else if used >= settings.weeklyWarn {
+                alert = "\(window.id)-warn-\(Int(settings.weeklyWarn))"
+                title = "\(provider.name) \(window.title) at \(Int(used))%"
+                body = resetText(window.resetsAt, prefix: "You set a warning at \(Int(settings.weeklyWarn))%.", now: now)
+            } else {
+                continue
+            }
+            let name = "\(provider.rawValue)-\(alert)"
+            guard !alreadyNotified(name, resetsAt: window.resetsAt, in: notified) else { continue }
+            alerts.append(Alert(name: name, resetsAt: window.resetsAt, title: title, body: body, provider: provider))
+        }
+        return alerts
+    }
+
     /// "At this pace your weekly limit runs out Sat 14:00, 1 day before it resets."
     static func paceText(runsOut out: Date, reset: Date, now: Date) -> String {
         let when = Calendar.current.isDate(out, inSameDayAs: now)

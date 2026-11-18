@@ -24,6 +24,12 @@ struct UsageView: View {
     @ObservedObject private var codexTrends = TrendModel.codex
     @ObservedObject private var claudeAnalytics = AnalyticsModel.claude
     @ObservedObject private var codexAnalytics = AnalyticsModel.codex
+    @ObservedObject private var geminiAnalytics = AnalyticsModel.gemini
+    @ObservedObject private var copilotAnalytics = AnalyticsModel.copilot
+    @ObservedObject private var opencodeAnalytics = AnalyticsModel.opencode
+    @ObservedObject private var geminiLimits = ToolLimitsModel.gemini
+    @ObservedObject private var copilotLimits = ToolLimitsModel.copilot
+    @ObservedObject private var opencodeLimits = ToolLimitsModel.opencode
     @ObservedObject private var router = AppRouter.shared
     @ObservedObject private var shown = ShownProviders.shared
 
@@ -49,14 +55,33 @@ struct UsageView: View {
     /// The provider picked on the switch, or the first shown one when it isn't shown any more.
     private var provider: UsageProvider { shown.pick(savedProvider) ?? savedProvider }
 
-    private var analytics: AnalyticsModel { provider == .claude ? claudeAnalytics : codexAnalytics }
-    private var trends: TrendModel { provider == .claude ? claudeTrends : codexTrends }
+    private var analytics: AnalyticsModel {
+        switch provider {
+        case .claude: return claudeAnalytics
+        case .codex: return codexAnalytics
+        case .gemini: return geminiAnalytics
+        case .copilot: return copilotAnalytics
+        case .opencode: return opencodeAnalytics
+        }
+    }
+
+    /// Gemini CLI's, Copilot's or OpenCode's limits; nil for Claude and Codex.
+    private var toolLimits: ToolLimitsModel? {
+        switch provider {
+        case .gemini: return geminiLimits
+        case .copilot: return copilotLimits
+        case .opencode: return opencodeLimits
+        case .claude, .codex: return nil
+        }
+    }
 
     /// The plan's limits as they stand now: Claude's last reading, or Codex's last logged one.
+    /// The other tools' windows aren't Claude's, so they have no session pill.
     private var limits: UsageSnapshot? {
         switch provider {
         case .claude: return refresher.snapshot
         case .codex: return codexAnalytics.limits?.asOf(Date())
+        case .gemini, .copilot, .opencode: return nil
         }
     }
 
@@ -72,6 +97,9 @@ struct UsageView: View {
         switch provider {
         case .claude: return "Claude's plan limits, and what Claude Code used on this Mac"
         case .codex: return "Codex's plan limits and what it used on this Mac, from its own logs"
+        case .gemini: return "Gemini's plan limits, and what Gemini CLI used on this Mac"
+        case .copilot: return "Copilot's premium requests, and what Copilot CLI used on this Mac"
+        case .opencode: return "What OpenCode used on this Mac, with the cost it recorded"
         }
     }
 
@@ -123,7 +151,7 @@ struct UsageView: View {
     /// Claude: each reading may have added a history sample, and Claude Code new transcript lines.
     /// Codex: its logs change as it runs, so they're read again every minute while shown.
     private var reloadKey: String {
-        provider == .claude ? "claude-\(refresher.snapshot?.fetchedAt.timeIntervalSince1970 ?? 0)" : "codex"
+        provider == .claude ? "claude-\(refresher.snapshot?.fetchedAt.timeIntervalSince1970 ?? 0)" : provider.rawValue
     }
 
     private func keepCurrent() async {
@@ -136,6 +164,14 @@ struct UsageView: View {
             while !Task.isCancelled {
                 await codexAnalytics.reload(maxAge: 30)
                 await codexTrends.reload(samples: codexAnalytics.limitHistory)
+                try? await Task.sleep(for: .seconds(60))
+            }
+        case .gemini, .copilot, .opencode:
+            // Their logs change as they run; their limits are read with the menu bar's, at most
+            // once a minute.
+            while !Task.isCancelled {
+                await analytics.reload(maxAge: 30)
+                await toolLimits?.refresh()
                 try? await Task.sleep(for: .seconds(60))
             }
         }
@@ -244,14 +280,33 @@ struct UsageView: View {
                     await codexAnalytics.reload()
                     await codexTrends.reload(samples: codexAnalytics.limitHistory)
                 }
+            case .gemini, .copilot, .opencode:
+                if let model = toolLimits, let fetchedAt = model.reading?.fetchedAt {
+                    AgeIndicator(since: fetchedAt, stale: model.isStale)
+                }
+                RefreshButton(isRefreshing: analytics.isLoading || (toolLimits?.isReading ?? false), help: "Read the limits and logs again") {
+                    await toolLimits?.refresh(force: true)
+                    await analytics.reload()
+                }
             }
             if analytics.hasLogs, analytics.lastLoaded != nil {
                 let cost = analytics.overview(period).totals.cost
                 (Text(costText(cost)).font(.system(size: 15, weight: .semibold).monospacedDigit())
                  + Text("  API prices").font(.system(size: 11)).foregroundStyle(.secondary))
                     .fixedSize()
-                    .help("What \(period == .custom ? "this range" : period.title.lowercased())'s \(provider.toolName) calls would cost at \(provider == .claude ? "Anthropic" : "OpenAI") API list prices")
+                    .help(costHelp)
             }
+        }
+    }
+
+    /// What the cost in the toolbar is.
+    private var costHelp: String {
+        let span = period == .custom ? "this range" : period.title.lowercased()
+        switch provider {
+        case .claude: return "What \(span)'s Claude Code calls would cost at Anthropic API list prices"
+        case .codex: return "What \(span)'s Codex calls would cost at OpenAI API list prices"
+        case .opencode: return "What \(span)'s OpenCode calls cost, as OpenCode recorded it"
+        case .gemini, .copilot: return "What \(span)'s \(provider.toolName) calls would cost at list prices, where Graphitree knows them"
         }
     }
 
@@ -287,7 +342,13 @@ struct UsageView: View {
                         CodexMissing()
                     } else {
                         allowances
-                        ClaudeCodeSection(analytics: analytics, period: period)
+                        if provider.readsSnapshot || analytics.hasLogs {
+                            ClaudeCodeSection(analytics: analytics, period: period)
+                        } else {
+                            EmptyStateView(icon: "tray", title: "No calls from \(provider.toolName) yet",
+                                           message: "Its calls show here once it has run on this Mac. Graphitree reads them from \(provider.logsPath).")
+                                .designCard()
+                        }
                     }
                 }
                 .padding(20)
@@ -318,22 +379,25 @@ struct UsageView: View {
             HStack(spacing: 10) {
                 SectionLabel("Allowances")
                 Spacer()
-                Menu {
-                    Picker("Trends", selection: $trendRange) {
-                        ForEach(TrendRange.allCases, id: \.self) { Text($0.title).tag($0) }
+                // The trends need the history only Claude's and Codex's readings keep.
+                if provider.readsSnapshot {
+                    Menu {
+                        Picker("Trends", selection: $trendRange) {
+                            ForEach(TrendRange.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.inline)
+                    } label: {
+                        Text("Trends: \(trendRange.title)")
+                            .font(.system(size: 12))
                     }
-                    .pickerStyle(.inline)
-                } label: {
-                    Text("Trends: \(trendRange.title)")
-                        .font(.system(size: 12))
+                    .menuStyle(.borderlessButton)
+                    .tint(.primary)
+                    .fixedSize()
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.track, in: RoundedRectangle(cornerRadius: 7))
+                    .help("What was left over time, under the limits")
                 }
-                .menuStyle(.borderlessButton)
-                .tint(.primary)
-                .fixedSize()
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Color.track, in: RoundedRectangle(cornerRadius: 7))
-                .help("What was left over time, under the limits")
                 // Codex's logs carry no account name, so there's nothing to hide.
                 if provider == .claude {
                     Button {
@@ -352,6 +416,8 @@ struct UsageView: View {
             switch provider {
             case .claude: claudeAllowances
             case .codex: codexAllowances
+            case .gemini, .copilot, .opencode:
+                if let toolLimits { ToolAllowancesCard(model: toolLimits, showLeft: showLeft) }
             }
         }
     }

@@ -20,12 +20,13 @@ extension Color {
 }
 
 extension UsageProvider {
-    /// The provider's own colour, for its marks: Claude's clay, and a pale grey for Codex, whose
-    /// brand is black and white.
+    /// The provider's own colour, for its marks: Claude's clay, Gemini's blue, and a pale grey for
+    /// the tools whose brands are black and white.
     var accent: Color {
         switch self {
         case .claude: return .clay
-        case .codex: return Color(hex: 0xC9D1D9)
+        case .gemini: return Color(hex: 0x8AB4F8)
+        case .codex, .copilot, .opencode: return Color(hex: 0xC9D1D9)
         }
     }
 }

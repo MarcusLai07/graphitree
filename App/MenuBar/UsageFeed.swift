@@ -102,11 +102,15 @@ final class UsageFeed {
             Task { @MainActor in
                 ShownProviders.shared.refresh()
                 await UsageFeed.shared.readCodex()
+                await UsageFeed.shared.readTools()
             }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        Task { await readCodex() }
+        Task {
+            await readCodex()
+            await readTools()
+        }
     }
 
     /// Stops reading, so nothing is written while Graphitree uninstalls itself.
@@ -123,6 +127,7 @@ final class UsageFeed {
         let refresher = UsageRefresher.shared
         if refresher.isRunning, ShownProviders.shared.contains(.claude) { await refresher.refresh(force: true) }
         await readCodex(force: true)
+        await readTools(force: true)
     }
 
     /// AI Models now lists other tools: start reading the ones that joined, and redraw the
@@ -130,7 +135,22 @@ final class UsageFeed {
     func shownChanged() {
         guard timer != nil else { return }
         if ShownProviders.shared.contains(.claude) { UsageRefresher.shared.startIfEnabled() }
-        Task { await readCodex(force: true) }
+        Task {
+            await readCodex(force: true)
+            await readTools(force: true)
+        }
+    }
+
+    /// The shown tools whose limits come as `LimitReading`: Gemini CLI, Copilot and OpenCode.
+    func readTools(force: Bool = false) async {
+        for provider in ShownProviders.shared.providers {
+            guard let model = ToolLimitsModel.of(provider) else { continue }
+            await model.refresh(force: force)
+            if let reading = model.current, model.problem == nil {
+                UsageAlerts.check(provider, reading: reading)
+            }
+        }
+        schedulePublish()
     }
 
     private func claudeDidRead() {
@@ -201,6 +221,7 @@ final class UsageFeed {
             switch provider {
             case .claude: plans[provider] = await claudePlan(now: now)
             case .codex: plans[provider] = codexPlan(now: now)
+            case .gemini, .copilot, .opencode: plans[provider] = toolPlan(provider)
             }
         }
         return WidgetFeed(written: now, showLeft: ClaudeUsageStore.showLeft, metrics: MenuBarSettings.metrics, plans: plans)
@@ -225,6 +246,18 @@ final class UsageFeed {
             claude.trend = claudeTrend.trend
         }
         return claude
+    }
+
+    private func toolPlan(_ provider: UsageProvider) -> WidgetFeed.Plan {
+        var plan = WidgetFeed.Plan()
+        guard let model = ToolLimitsModel.of(provider) else { return plan }
+        plan.limits = model.reading
+        plan.name = model.reading?.plan
+        plan.isStale = model.isStale
+        if model.reading == nil {
+            plan.problem = model.problem?.message ?? (model.lastAttempt == nil ? "Reading \(provider.name)'s limits…" : "No limits to show.")
+        }
+        return plan
     }
 
     private func codexPlan(now: Date) -> WidgetFeed.Plan {

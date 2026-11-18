@@ -59,7 +59,7 @@ struct AllowancesCard: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                ModelLogo(id: provider.connectionID, size: 18)
+                ModelLogo(id: provider.brandID, size: 18)
                 Text(provider.name)
                     .font(.system(size: 14, weight: .semibold))
             }

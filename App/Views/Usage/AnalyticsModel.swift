@@ -9,9 +9,18 @@ final class AnalyticsModel: ObservableObject {
     /// reopening it shows the last scan at once and only rescans when that's over a minute old.
     static let claude = AnalyticsModel(.claude)
     static let codex = AnalyticsModel(.codex)
+    static let gemini = AnalyticsModel(.gemini)
+    static let copilot = AnalyticsModel(.copilot)
+    static let opencode = AnalyticsModel(.opencode)
 
     static func of(_ provider: UsageProvider) -> AnalyticsModel {
-        provider == .claude ? claude : codex
+        switch provider {
+        case .claude: return claude
+        case .codex: return codex
+        case .gemini: return gemini
+        case .copilot: return copilot
+        case .opencode: return opencode
+        }
     }
 
     let provider: UsageProvider
@@ -45,6 +54,9 @@ final class AnalyticsModel: ObservableObject {
         switch provider {
         case .claude: return FileManager.default.fileExists(atPath: TranscriptStats.claudeFolder.appendingPathComponent("projects").path)
         case .codex: return CodexSessions.hasSessions()
+        case .gemini: return GeminiUsage.hasLogs(home: NSHomeDirectory())
+        case .copilot: return CopilotUsage.hasLogs(home: NSHomeDirectory())
+        case .opencode: return OpenCodeUsage.hasLogs(home: NSHomeDirectory())
         }
     }
 
@@ -68,7 +80,27 @@ final class AnalyticsModel: ObservableObject {
         switch provider {
         case .claude: await reloadClaude()
         case .codex: await reloadCodex()
+        case .gemini, .copilot, .opencode: await reloadTool()
         }
+    }
+
+    /// Gemini CLI, Copilot CLI or OpenCode: every call in its logs. Their limits come apart, from
+    /// `ToolLimitsModel`.
+    private func reloadTool() async {
+        let provider = provider
+        let home = NSHomeDirectory()
+        let scan = await Task.detached(priority: .userInitiated) { () -> TranscriptScan in
+            var scan: TranscriptScan
+            switch provider {
+            case .gemini: scan = GeminiUsage.scan(home: home, since: .distantPast)
+            case .copilot: scan = CopilotUsage.scan(home: home, since: .distantPast)
+            case .opencode: scan = OpenCodeUsage.scan(home: home, since: .distantPast)
+            case .claude, .codex: scan = TranscriptScan()
+            }
+            scan.samples.sort { $0.ts < $1.ts }
+            return scan
+        }.value
+        apply(scan)
     }
 
     private func reloadCodex() async {

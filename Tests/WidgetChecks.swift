@@ -82,6 +82,35 @@ func menuBarAndWidgetChecks() throws {
     expectEqual(MenuBarFigures.provider(.codex).effective(shown: []), MenuBarFigures.none, "with none shown, only the icon")
     expectEqual(MenuBarFigures.none.effective(shown: [.claude]), MenuBarFigures.none, "the icon alone stays the icon alone")
 
+    // MARK: Other tools' limits
+
+    let premium = LimitWindow(id: "premium", title: "Premium requests", utilization: 85, resetsAt: utc("2026-12-01T00:00:00Z"),
+                              span: 30 * 86400, detail: "255 of 300 used")
+    let daily = LimitWindow(id: "gemini-2.5-pro", title: "Gemini 2.5 Pro · daily", utilization: 100, resetsAt: utc("2026-11-19T00:00:00Z"), span: 86400)
+    check(premium.asOf(now) == premium, "a window before its reset stands as read")
+    let afterReset = daily.asOf(utc("2026-11-19T00:05:00Z"))
+    check(afterReset.utilization == 0 && afterReset.resetsAt == nil, "past its reset, a window is back to 0%")
+    let reading = LimitReading(fetchedAt: now, windows: [premium, daily], plan: "Copilot Pro")
+    expectEqual(snapshot.limitWindows([.session, .weekly, .extraUsage]).map(\.id), ["session", "weekly"],
+                "Claude's windows map across, leaving out extra usage, which is money")
+    expectEqual(snapshot.limitWindows([.session]).first?.span, MetricKind.session.span, "with their cycle's length, for the pace")
+    let toolAlerts = UsageAlerts.due(.copilot, reading: reading, settings: UsageAlerts.Settings(), notified: [], now: now)
+    expectEqual(toolAlerts.map(\.name), ["copilot-premium-warn-80", "copilot-gemini-2.5-pro-limit"],
+                "another tool's windows warn past the share set, and at their limit")
+    let sentKeys = toolAlerts.map { UsageAlerts.notificationKey($0.name, resetsAt: $0.resetsAt) }
+    expectEqual(UsageAlerts.due(.copilot, reading: reading, settings: UsageAlerts.Settings(), notified: sentKeys, now: now), [],
+                "each fires once per cycle")
+    var alertsOff = UsageAlerts.Settings()
+    alertsOff.isOn = false
+    expectEqual(UsageAlerts.due(.copilot, reading: reading, settings: alertsOff, notified: [], now: now), [], "nothing with alerts off")
+    let toolFeed = WidgetFeed(written: now, showLeft: false, metrics: [.session], plans: [.copilot: WidgetFeed.Plan(limits: reading, name: "Copilot Pro")])
+    expectEqual(WidgetFeedStore.encode(toolFeed).flatMap(WidgetFeedStore.decode)?.plan(.copilot)?.limits, reading,
+                "another tool's reading reaches the widgets")
+    expectEqual(UsageProvider.gemini.brandID, "tool:gemini", "Gemini CLI wears its own brand, not the Gemini API's")
+    expectEqual(UsageProvider.allCases.map(\.logoName), ["claude-code", "codex", "gemini-cli", "copilot", "opencode"],
+                "each tool's logo has a file the widget bundles")
+    check(UsageProvider.allCases.allSatisfy { $0.codingTool != nil }, "every provider is a tool AI Models knows")
+
     // MARK: The week's curve
 
     let start = weeklyReset.addingTimeInterval(-7 * 86400)

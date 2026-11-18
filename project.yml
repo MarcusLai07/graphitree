@@ -93,6 +93,12 @@ targets:
         buildPhase: resources
       - path: App/Resources/ModelLogos/ModelLogo-codex.png
         buildPhase: resources
+      - path: App/Resources/ModelLogos/ModelLogo-gemini-cli.png
+        buildPhase: resources
+      - path: App/Resources/ModelLogos/ModelLogo-copilot.png
+        buildPhase: resources
+      - path: App/Resources/ModelLogos/ModelLogo-opencode.png
+        buildPhase: resources
     info:
       path: Widget/Info.plist
       properties:

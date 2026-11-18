@@ -125,6 +125,8 @@ struct ReadingAge: View {
             return Text(stale ? "Last updated " : "Updated ") + Text(since, style: .relative) + Text(" ago")
         case .codex:
             return Text("As of Codex's last reply, ") + Text(since, style: .relative) + Text(" ago")
+        case .gemini, .copilot, .opencode:
+            return Text(stale ? "Last updated " : "Updated ") + Text(since, style: .relative) + Text(" ago")
         }
     }
 

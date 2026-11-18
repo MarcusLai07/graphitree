@@ -40,6 +40,23 @@ extension UsageAlerts {
         }
     }
 
+    /// The same for a tool whose limits come as `LimitReading`.
+    @MainActor
+    static func check(_ provider: UsageProvider, reading: LimitReading) {
+        guard canNotify else { return }
+        let settings = Settings.current
+        guard settings.isOn else { return }
+        Task { @MainActor in
+            let defaults = UserDefaults.standard
+            var keys = defaults.stringArray(forKey: Key.notified) ?? []
+            let alerts = due(provider, reading: reading.asOf(Date()), settings: settings, notified: keys, now: Date())
+            guard !alerts.isEmpty else { return }
+            keys += alerts.map { notificationKey($0.name, resetsAt: $0.resetsAt) }
+            defaults.set(Array(keys.suffix(80)), forKey: Key.notified)
+            send(alerts)
+        }
+    }
+
     private static func send(_ alerts: [Alert]) {
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { current in

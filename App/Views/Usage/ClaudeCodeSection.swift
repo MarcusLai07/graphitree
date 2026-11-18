@@ -64,6 +64,12 @@ struct ClaudeCodeSection: View {
                 codex += " \(analytics.unreadCompressed) older log\(analytics.unreadCompressed == 1 ? " is" : "s are") compressed and left out: `brew install zstd` lets Graphitree read them."
             }
             text = codex
+        case .gemini:
+            text = "Token counts cover **Gemini CLI on this Mac only**, from its chat logs. Tokens are fresh input + output + cached input; output includes thinking. Gemini CLI records no cost, so cost shows only for models Graphitree has list prices for."
+        case .copilot:
+            text = "Counts cover **Copilot CLI on this Mac only**, from its session logs, which record only each reply's output tokens. Copilot in your editor and on github.com count toward the same premium requests but leave no trace here. Copilot CLI records no cost."
+        case .opencode:
+            text = "Token counts cover **OpenCode on this Mac only**, from its database, and cost is what OpenCode recorded. Calls it sent through your Claude or ChatGPT plan also count toward those plans' limits, and may show under Claude or Codex too."
         }
         return (try? AttributedString(markdown: text)) ?? AttributedString(text)
     }

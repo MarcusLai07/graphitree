@@ -10,12 +10,15 @@ import WidgetKit
 // MARK: - Configuration
 
 enum WidgetPlan: String, AppEnum {
-    case claude, codex
+    case claude, codex, gemini, copilot, opencode
 
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "Plan"
     static let caseDisplayRepresentations: [WidgetPlan: DisplayRepresentation] = [
         .claude: "Claude",
         .codex: "Codex",
+        .gemini: "Gemini",
+        .copilot: "Copilot",
+        .opencode: "OpenCode",
     ]
 
     var provider: UsageProvider { UsageProvider(rawValue: rawValue) ?? .claude }
@@ -60,18 +63,30 @@ struct UsageEntry: TimelineEntry {
     /// The reading as it stands at the entry's date: windows that have reset since read 0%.
     var snapshot: UsageSnapshot? { plan?.snapshot?.asOf(date) }
 
+    /// Gemini CLI's, Copilot's or OpenCode's limits as they stand at the entry's date.
+    var limits: LimitReading? { plan?.limits?.asOf(date) }
+
     /// Pace is measured at the entry's date, so later entries move it along without a reading.
     var displays: [MetricDisplay] {
-        guard let snapshot, let feed else { return [] }
-        return MetricPresentation.displays(for: snapshot, kinds: feed.kinds(provider), showLeft: feed.showLeft, now: date)
+        guard let feed else { return [] }
+        if let snapshot {
+            return MetricPresentation.displays(for: snapshot, kinds: feed.kinds(provider), showLeft: feed.showLeft, now: date)
+        }
+        if let limits {
+            return MetricPresentation.displays(for: limits.windows, showLeft: feed.showLeft, now: date)
+        }
+        return []
     }
+
+    /// When the reading shown was taken.
+    var fetchedAt: Date? { snapshot?.fetchedAt ?? limits?.fetchedAt }
 
     /// Graphitree hasn't written for a while, so it isn't running to read the limits.
     var isQuiet: Bool { feed?.isQuiet(now: date) ?? true }
 
-    /// The reading shown isn't current: the last one failed, or Claude's readings have stopped.
+    /// The reading shown isn't current: the last one failed, or Graphitree has stopped reading.
     /// Codex's limits are as of its last reply, so they age without going stale.
-    var isStale: Bool { (plan?.isStale ?? false) || (provider == .claude && isQuiet) }
+    var isStale: Bool { (plan?.isStale ?? false) || (provider != .codex && isQuiet) }
 
     var url: URL { URL(string: "graphitree://usage?plan=\(provider.rawValue)")! }
 }
@@ -103,6 +118,16 @@ struct UsageTimeline: AppIntentTimelineProvider {
 
 extension UsageEntry {
     /// Figures for the widget gallery and placeholders.
+    private static func sampleName(_ provider: UsageProvider) -> String {
+        switch provider {
+        case .claude: return "Max"
+        case .codex: return "ChatGPT Plus"
+        case .gemini: return "Code Assist"
+        case .copilot: return "Copilot Pro"
+        case .opencode: return "OpenCode Go"
+        }
+    }
+
     static func sample(_ provider: UsageProvider, date: Date = Date()) -> UsageEntry {
         let snapshot = UsageSnapshot(
             fetchedAt: date,
@@ -110,7 +135,7 @@ extension UsageEntry {
             weekly: UsageWindow(utilization: 17, resetsAt: date.addingTimeInterval(4 * 86400)),
             weeklyOpus: nil, weeklySonnet: nil, extra: nil
         )
-        let plan = WidgetFeed.Plan(snapshot: snapshot, name: provider == .claude ? "Max" : "ChatGPT Plus")
+        let plan = WidgetFeed.Plan(snapshot: snapshot, name: Self.sampleName(provider))
         let feed = WidgetFeed(written: date, showLeft: false, metrics: [.session, .weekly], plans: [provider: plan])
         return UsageEntry(date: date, provider: provider, feed: feed)
     }
@@ -144,7 +169,7 @@ struct ProviderMark: View {
 
     @MainActor
     static func image(_ provider: UsageProvider) -> NSImage? {
-        let name = "ModelLogo-\(provider.connectionID)"
+        let name = "ModelLogo-\(provider.logoName)"
         if let image = Bundle.main.image(forResource: name) { return image }
         return folder.flatMap { NSImage(contentsOf: $0.appendingPathComponent(name + ".png")) }
     }
@@ -167,7 +192,7 @@ struct WidgetHeader: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
-            if showAge, entry.provider == .claude, let fetchedAt = entry.snapshot?.fetchedAt {
+            if showAge, entry.provider != .codex, let fetchedAt = entry.fetchedAt {
                 AgeBadge(since: fetchedAt, stale: entry.isStale)
             }
         }
@@ -193,11 +218,11 @@ struct WidgetFooter: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            if entry.provider == .claude, entry.isQuiet {
+            if entry.provider != .codex, entry.isQuiet {
                 Image(systemName: "clock.badge.exclamationmark")
                     .font(.system(size: 9, weight: .medium))
                 Text("Open Graphitree to update")
-            } else if let fetchedAt = entry.snapshot?.fetchedAt {
+            } else if let fetchedAt = entry.fetchedAt {
                 Image(systemName: entry.isStale ? "clock.badge.exclamationmark" : "arrow.clockwise")
                     .font(.system(size: 9, weight: .medium))
                 ReadingAge(provider: entry.provider, since: fetchedAt, stale: entry.isStale).text
@@ -345,7 +370,7 @@ struct BarsWidgetView: View {
                 ProviderMark(provider: entry.provider, size: 12)
                 WidgetLabel(hero.name)
                 Spacer(minLength: 2)
-                if entry.provider == .claude, let fetchedAt = entry.snapshot?.fetchedAt {
+                if entry.provider != .codex, let fetchedAt = entry.fetchedAt {
                     AgeBadge(since: fetchedAt, stale: entry.isStale)
                 }
             }
@@ -449,7 +474,7 @@ struct RingsWidgetView: View {
             HStack {
                 ProviderMark(provider: entry.provider, size: 14)
                 Spacer()
-                if entry.provider == .claude, let fetchedAt = entry.snapshot?.fetchedAt {
+                if entry.provider != .codex, let fetchedAt = entry.fetchedAt {
                     AgeBadge(since: fetchedAt, stale: entry.isStale)
                 }
             }

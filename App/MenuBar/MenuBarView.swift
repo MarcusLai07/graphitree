@@ -8,6 +8,9 @@ struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
     @ObservedObject private var refresher = UsageRefresher.shared
     @ObservedObject private var codex = CodexLimits.shared
+    @ObservedObject private var gemini = ToolLimitsModel.gemini
+    @ObservedObject private var copilot = ToolLimitsModel.copilot
+    @ObservedObject private var opencode = ToolLimitsModel.opencode
     @AppStorage(MenuBarSettings.Key.figures) private var savedFigures: MenuBarFigures = .claude
     @ObservedObject private var shown = ShownProviders.shared
     @AppStorage(ClaudeUsageStore.Key.showLeft) private var showLeft = false
@@ -16,7 +19,7 @@ struct MenuBarLabel: View {
     private var figures: MenuBarFigures { savedFigures.effective(shown: shown.providers) }
 
     var body: some View {
-        Image(nsImage: MenuBarIcon.label(MenuBarIcon.figures(snapshot, showLeft: showLeft)))
+        Image(nsImage: MenuBarIcon.label(labelFigures))
             .accessibilityLabel(accessibilityText)
             .onAppear {
                 MainWindow.open = { [openWindow] in openWindow(id: "main") }
@@ -27,11 +30,27 @@ struct MenuBarLabel: View {
         switch figures.provider {
         case .claude?: return refresher.snapshot
         case .codex?: return codex.snapshot
-        case nil: return nil
+        case .gemini?, .copilot?, .opencode?, nil: return nil
         }
     }
 
+    /// Another tool's windows, when it's the one beside the icon.
+    private var toolWindows: [LimitWindow]? {
+        figures.provider.flatMap(ToolLimitsModel.of)?.current?.windows
+    }
+
+    private var labelFigures: [String] {
+        if let toolWindows { return MenuBarIcon.figures(toolWindows, showLeft: showLeft) }
+        return MenuBarIcon.figures(snapshot, showLeft: showLeft)
+    }
+
     private var accessibilityText: String {
+        if let provider = figures.provider, let toolWindows {
+            let parts = toolWindows.prefix(2).compactMap { window in
+                window.utilization.map { "\(window.title) \(Int(showLeft ? max(0, 100 - $0) : $0))% \(showLeft ? "left" : "used")" }
+            }
+            return "Graphitree, \(provider.name) " + parts.joined(separator: ", ")
+        }
         guard let provider = figures.provider, let snapshot else { return "Graphitree" }
         let parts = [("session", snapshot.session), ("weekly", snapshot.weekly)].compactMap { name, window -> String? in
             guard let window else { return nil }
@@ -57,8 +76,12 @@ struct MenuBarView: View {
             // The tools AI Models lists under Connected, in the Usage page's order.
             ForEach(shown.providers) { provider in
                 Divider().padding(.horizontal, 12)
-                PlanSection(provider: provider, metrics: provider == .claude ? MenuBarSettings.parse(metricsText) : [.session, .weekly],
-                            showLeft: showLeft)
+                if let model = ToolLimitsModel.of(provider) {
+                    ToolPlanSection(model: model, showLeft: showLeft)
+                } else {
+                    PlanSection(provider: provider, metrics: provider == .claude ? MenuBarSettings.parse(metricsText) : [.session, .weekly],
+                                showLeft: showLeft)
+                }
             }
             if shown.providers.isEmpty {
                 Divider().padding(.horizontal, 12)
@@ -129,6 +152,53 @@ struct MenuBarView: View {
     }
 }
 
+/// Gemini CLI's, Copilot's or OpenCode's plan in the popover, from its `LimitReading`.
+private struct ToolPlanSection: View {
+    @ObservedObject var model: ToolLimitsModel
+    let showLeft: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: 7) {
+                ModelLogo(id: model.provider.brandID, size: 16)
+                Text(model.provider.name)
+                    .font(.system(size: 13, weight: .semibold))
+                if let plan = model.reading?.plan {
+                    Text(plan)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let fetchedAt = model.reading?.fetchedAt {
+                    AgeBadge(since: fetchedAt, stale: model.isStale)
+                }
+            }
+            if let reading = model.current {
+                VStack(spacing: 12) {
+                    ForEach(MetricPresentation.displays(for: reading.windows, showLeft: showLeft)) { MetricBarRow(metric: $0) }
+                }
+                .opacity(model.isStale ? 0.75 : 1)
+                if model.isStale, let problem = model.problem {
+                    Text("Couldn't refresh. \(problem.message)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else if let problem = model.problem {
+                Text(problem.message)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ProgressView("Reading…")
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.init(top: 11, leading: 14, bottom: 12, trailing: 14))
+    }
+}
+
 /// One plan in the popover: its logo, name and plan, how old the reading is, then a bar per
 /// window, or why there's no reading.
 private struct PlanSection: View {
@@ -160,7 +230,7 @@ private struct PlanSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             HStack(spacing: 7) {
-                ModelLogo(id: provider.connectionID, size: 16)
+                ModelLogo(id: provider.brandID, size: 16)
                 Text(provider.name)
                     .font(.system(size: 13, weight: .semibold))
                 if let planName {

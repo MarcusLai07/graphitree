@@ -3,7 +3,11 @@ import SwiftUI
 /// One displayable metric row, derived from the snapshot and the user's
 /// enabled-metrics setting. Extra usage shows dollars instead of a percent.
 struct MetricDisplay: Identifiable {
+    /// Claude's or Codex's window, for its colour and forecast. Another tool's window borrows
+    /// `.weekly`'s colour.
     let kind: MetricKind
+    /// Unique within a reading: the kind's raw value, or another tool's window id.
+    var key: String? = nil
     let name: String
     /// Percent used. Drives the escalation color in both Used and Left mode,
     /// so a nearly empty window stays red whichever figure is shown.
@@ -21,7 +25,7 @@ struct MetricDisplay: Identifiable {
     /// or is already used up.
     let pace: Double?
 
-    var id: String { kind.rawValue }
+    var id: String { key ?? kind.rawValue }
 
     /// What the bar or ring fills with. Left is 100 minus the whole percent
     /// used, so it matches `valueText` (16.6% used shows 84% left).
@@ -89,6 +93,23 @@ enum MetricPresentation {
                                  caption: notStarted ? "Not started" : nil,
                                  pace: pace(used: percent, resetsAt: window.resetsAt,
                                             span: kind.span, now: now))
+        }
+    }
+
+    /// Another tool's windows (`LimitWindow`), drawn the same way. A detail such as "238 of 300
+    /// used" shows where Claude's windows say "Not started".
+    static func displays(for windows: [LimitWindow], showLeft: Bool = ClaudeUsageStore.showLeft,
+                         now: Date = Date()) -> [MetricDisplay] {
+        windows.map { window in
+            let percent = window.utilization ?? 0
+            let used = Int(percent)
+            return MetricDisplay(kind: MetricKind(rawValue: window.id) ?? .weekly, key: window.id, name: window.title,
+                                 percent: percent, showLeft: showLeft,
+                                 valueText: "\(showLeft ? max(0, 100 - used) : used)%",
+                                 unitText: showLeft ? "left" : "used",
+                                 resetsAt: window.resetsAt,
+                                 caption: window.detail,
+                                 pace: pace(used: percent, resetsAt: window.resetsAt, span: window.span, now: now))
         }
     }
 

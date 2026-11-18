@@ -7,7 +7,10 @@ import Foundation
 struct WidgetFeed: Codable, Equatable {
     /// One plan's limits as Graphitree last read them.
     struct Plan: Codable, Equatable {
+        /// Claude's and Codex's limits.
         var snapshot: UsageSnapshot?
+        /// Gemini CLI's, Copilot's and OpenCode's limits.
+        var limits: LimitReading?
         /// "Max 5x", "ChatGPT Plus".
         var name: String?
         /// Why there's no reading, in a few words, shown in place of the meters.
