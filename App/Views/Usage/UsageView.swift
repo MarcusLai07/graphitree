@@ -36,8 +36,6 @@ struct UsageView: View {
     /// Bumped when the custom range changes, to redraw what depends on it.
     @State private var rangeTick = 0
 
-    let openModels: () -> Void
-
     /// `-usageTab requests` opens a tab at launch, for screenshots.
     private static var startTab: UsageTab {
         UserDefaults.standard.string(forKey: "usageTab").flatMap(UsageTab.init(rawValue:)) ?? .overview
@@ -246,7 +244,7 @@ struct UsageView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     if provider == .claude, let error = refresher.lastError {
-                        SignInNotice(error: error, hasReading: refresher.snapshot != nil, openModels: openModels)
+                        SignInNotice(error: error, hasReading: refresher.snapshot != nil)
                     }
                     if provider == .codex, !codexAnalytics.hasLogs {
                         CodexMissing()
@@ -406,25 +404,26 @@ struct SignInNotice: View {
     @Environment(AppModel.self) private var model
     let error: UsageAPIError
     let hasReading: Bool
-    let openModels: () -> Void
+    @State private var showsSignIn = false
 
-    /// What AI Models last found for Claude Code, when it found something wrong with its sign-in.
+    /// What AI Models last found for Claude Code, when it found something wrong with the sign-in
+    /// Graphitree borrows.
     private var claudeProblem: ConnectionHealth? {
-        guard isSignInTrouble, let health = model.connectionHealth[ClaudeCodeSignIn.connectionID],
+        guard isSignInTrouble, !refresher.hasOwnSignIn, let health = model.connectionHealth[ClaudeCodeSignIn.connectionID],
               health.level >= .warning, health.fix == .signIn else { return nil }
         return health
     }
 
     private var isSignInTrouble: Bool {
         switch error {
-        case .notSignedIn, .tokenExpired, .http(401): return true
+        case .notSignedIn, .tokenExpired, .signInExpired, .http(401): return true
         default: return false
         }
     }
 
     private var isWarning: Bool {
         switch error {
-        case .notSignedIn, .keychainDenied, .http(401): return true
+        case .notSignedIn, .keychainDenied, .signInExpired, .http(401): return true
         default: return false
         }
     }
@@ -432,33 +431,35 @@ struct SignInNotice: View {
     private var title: String {
         if let claudeProblem { return "Claude Code: \(claudeProblem.status)" }
         switch error {
-        case .notSignedIn: return "Claude Code isn't signed in on this Mac"
+        case .notSignedIn: return "Sign in to read your plan's limits"
         case .keychainDenied: return "Graphitree needs to read Claude Code's sign-in"
-        case .tokenExpired: return "Claude Code's sign-in needs renewing"
-        case .http(401): return "Anthropic turned down Claude Code's sign-in"
+        case .tokenExpired: return "Claude Code's sign-in ran out"
+        case .signInExpired: return "Graphitree's sign-in to Claude ran out"
+        case .http(401): return refresher.hasOwnSignIn ? "Anthropic turned down Graphitree's sign-in" : "Anthropic turned down Claude Code's sign-in"
         case .offline: return "Offline"
         default: return "Couldn't read the plan's limits"
         }
     }
 
     private var detail: String {
-        if let claudeProblem { return claudeProblem.detail + " The limits come from Claude Code's sign-in." }
+        if let claudeProblem {
+            return claudeProblem.detail + " Graphitree borrows Claude Code's sign-in until you sign in to Claude here."
+        }
         switch error {
         case .notSignedIn:
-            return "The limits come from Claude Code's sign-in. Claude Code's activity below doesn't need it."
+            return "Sign in to Claude here, and Graphitree keeps a sign-in of its own. Claude Code's activity below doesn't need it."
         case .keychainDenied:
-            return "Claude Code keeps its sign-in in your keychain. Graphitree only reads it, to ask Anthropic for your plan's limits, and never changes it. Choose Always Allow when macOS asks."
+            return "Claude Code keeps its sign-in in your keychain. Graphitree only reads it, to ask Anthropic for your plan's limits, and never changes it. Choose Always Allow when macOS asks, or sign in to Claude here instead."
         case .tokenExpired:
-            return "Claude Code renews it the next time it runs. Graphitree never renews it itself, so it can't sign Claude Code out."
+            return "Graphitree has been borrowing it, and only Claude Code's terminal command renews it, not the Code tab in Claude's app. Sign in to Claude here and Graphitree keeps a sign-in of its own that it renews itself."
+        case .signInExpired:
+            return "Anthropic turned it down when Graphitree went to renew it, after a sign-out elsewhere or a long time unused. Sign in again."
         case .http(401):
-            return "Sign in to Claude Code again."
+            return "Sign in to Claude here."
         default:
             return (error.errorDescription ?? "") + "."
         }
     }
-
-    /// Signing in again needs Claude Code on this Mac; AI Models has it when it found it.
-    private var canSignIn: Bool { model.connectionHealth[ClaudeCodeSignIn.connectionID] != nil }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -481,23 +482,19 @@ struct SignInNotice: View {
             action
         }
         .modifier(RowCard())
+        .sheet(isPresented: $showsSignIn) { ClaudeSignInSheet() }
     }
 
     @ViewBuilder
     private var action: some View {
-        if claudeProblem != nil || ((error == .notSignedIn || error == .http(401)) && canSignIn) {
-            Button("Sign In Again") { model.signInToClaudeCode() }
+        if isSignInTrouble {
+            Button("Sign In…") { showsSignIn = true }
                 .buttonStyle(GoldButtonStyle())
-                .help("Opens Terminal with claude auth login. Sign-in happens in your browser.")
+                .help("Signs Graphitree in to Claude in your browser, so it reads your limits on its own.")
+        } else if error == .keychainDenied {
+            Button("Try Again") { Task { await refresher.retrySignIn() } }.buttonStyle(GoldButtonStyle())
         } else {
-            switch error {
-            case .notSignedIn, .http(401):
-                Button("Open AI Models", action: openModels).buttonStyle(SoftButtonStyle())
-            case .keychainDenied:
-                Button("Try Again") { Task { await refresher.retrySignIn() } }.buttonStyle(GoldButtonStyle())
-            default:
-                Button("Try Again") { Task { await refresher.refresh(force: true) } }.buttonStyle(SoftButtonStyle())
-            }
+            Button("Try Again") { Task { await refresher.refresh(force: true) } }.buttonStyle(SoftButtonStyle())
         }
     }
 }

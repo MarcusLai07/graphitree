@@ -142,6 +142,53 @@ func usageSummaryChecks() throws {
     check(UsageAPIError.offline.errorDescription?.contains("HTTP") == false, "offline never says HTTP 0")
     check(AICatalog.codingTools.contains { $0.id == ClaudeCodeSignIn.connectionID }, "the sign-in notice reads Claude Code's own health check")
 
+    // MARK: Graphitree's own sign-in
+
+    // The challenge worked out apart from CryptoKit, with Python's hashlib and urlsafe_b64encode.
+    let knownPair = ClaudeOAuth.PKCE(verifier: "dBjftJeZ4CVP-mJ92K1aQOQXbXTENtMZFAyYR4AwSnw", state: "s")
+    expectEqual(knownPair.challenge, "htG_aR9JCzqGSsVY1LOCJplFGvZEawcjIFGcItLDl44", "the challenge is the verifier's SHA-256, base64 for URLs")
+    let fresh = ClaudeOAuth.PKCE()
+    check(fresh.verifier.count == 43 && fresh.state.count == 43 && fresh.verifier != fresh.state, "each page gets its own 43-character verifier and state")
+    check(!fresh.verifier.contains { "+/=".contains($0) }, "they're safe in a URL")
+    let page = URLComponents(url: ClaudeOAuth.authorizeURL(pkce: fresh), resolvingAgainstBaseURL: false)
+    func pageItem(_ name: String) -> String? { page?.queryItems?.first { $0.name == name }?.value }
+    expectEqual(pageItem("code_challenge"), fresh.challenge, "the page gets the challenge")
+    expectEqual(pageItem("code_challenge_method"), "S256", "hashed, not plain")
+    expectEqual(pageItem("state"), fresh.state, "and the state")
+    check(pageItem("code_challenge") != fresh.verifier && page?.url?.absoluteString.contains(fresh.verifier) == false, "never the verifier, which only goes to the token endpoint")
+    expectEqual(pageItem("client_id"), ClaudeOAuth.clientID, "with the public client Claude Code uses")
+    check(pageItem("scope")?.contains("org:create_api_key") == false, "without asking to make API keys")
+
+    check(ClaudeOAuth.parse(pasted: "abc123#st4te").map { $0.code == "abc123" && $0.state == "st4te" } == true, "the page's code#state splits in two")
+    check(ClaudeOAuth.parse(pasted: "  abc123#st4te\n").map { $0.code == "abc123" } == true, "spaces and a line break around it are ignored")
+    check(ClaudeOAuth.parse(pasted: "abc123").map { $0.code == "abc123" && $0.state == nil } == true, "a code without its state still works")
+    check(ClaudeOAuth.parse(pasted: "https://console.anthropic.com/oauth/code/callback?code=abc123&state=st4te").map { $0.code == "abc123" && $0.state == "st4te" } == true,
+          "the page's whole address works too")
+    check(ClaudeOAuth.parse(pasted: "") == nil && ClaudeOAuth.parse(pasted: "#st4te") == nil && ClaudeOAuth.parse(pasted: "two words") == nil, "nothing that looks like a code is turned down")
+
+    let issued = utc("2026-11-18T08:00:00Z")
+    let answer = Data(#"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":28800,"token_type":"Bearer"}"#.utf8)
+    let renewed = ClaudeOAuth.tokens(from: answer, keeping: "old-refresh", now: issued)
+    expectEqual(renewed, ClaudeTokens(accessToken: "new-access", refreshToken: "new-refresh", expiresAt: utc("2026-11-18T16:00:00Z")), "the answer's lifetime counts from when it came")
+    let kept = ClaudeOAuth.tokens(from: Data(#"{"access_token":"new-access","expires_in":60}"#.utf8), keeping: "old-refresh", now: issued)
+    expectEqual(kept?.refreshToken, "old-refresh", "without a new refresh token, the old one stays")
+    check(ClaudeOAuth.tokens(from: Data(#"{"error":"invalid_grant"}"#.utf8), keeping: nil) == nil, "an error answer isn't tokens")
+    check(renewed?.isExpired(now: utc("2026-11-18T15:58:00Z")) == false, "two minutes before the end it's still good")
+    check(renewed?.isExpired(now: utc("2026-11-18T15:59:30Z")) == true, "within a minute of the end it counts as run out")
+
+    let signInStore = ClaudeSignInStore(keychain: AIKeychain(service: "Graphitree checks \(UUID().uuidString)"))
+    check(signInStore.load() == nil, "no sign-in to start with")
+    if let renewed { try signInStore.save(renewed) }
+    expectEqual(signInStore.load(), renewed, "a saved sign-in reads back the same, to the second")
+    signInStore.clear()
+    check(signInStore.load() == nil, "signing out deletes it")
+    check(ClaudeSignInStore.standard.keychain.service != ClaudeCodeSignIn.service, "Graphitree's sign-in is never kept in Claude Code's item")
+
+    let own = UsageAPI.TokenCache.Credential(ClaudeTokens(accessToken: "a", refreshToken: "r", expiresAt: nil))
+    check(own.isOwn && !own.isExpired(), "Graphitree's own token is marked as its own, and one without an end doesn't run out")
+    expectEqual(UsageAPIError.from(UsageAPIError.signInExpired), .signInExpired, "an expired own sign-in passes through as itself")
+    check(ClaudeOAuth.Failure.rejected(400).errorDescription?.contains("open the sign-in page again") == true, "a used-up code says to start again")
+
     // MARK: Sums and groupings
 
     func call(_ id: String, at: Date, session: String = "s1", cwd: String? = "/Users/t/app", app: String? = "claude-desktop",

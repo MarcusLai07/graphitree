@@ -232,8 +232,9 @@ final class UsageFeed {
         case .none: return "Reading Claude's limits…"
         case .notSignedIn?: return "Claude Code isn't signed in on this Mac."
         case .keychainDenied?: return "Graphitree needs to read Claude Code's sign-in."
-        case .tokenExpired?: return "Claude Code's sign-in needs renewing."
-        case .http(401)?: return "Anthropic turned down Claude Code's sign-in."
+        case .tokenExpired?: return "Claude Code's sign-in ran out."
+        case .signInExpired?: return "Graphitree's sign-in to Claude ran out."
+        case .http(401)?: return refresher.hasOwnSignIn ? "Anthropic turned down Graphitree's sign-in." : "Anthropic turned down Claude Code's sign-in."
         case .offline?: return "Offline."
         default: return "Couldn't read the plan's limits."
         }

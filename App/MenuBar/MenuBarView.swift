@@ -134,6 +134,15 @@ private struct PlanSection: View {
 
     private var isStale: Bool { provider == .claude && refresher.isStale }
 
+    /// Claude's reading failed on the sign-in, which signing Graphitree in to Claude fixes.
+    private var needsSignIn: Bool {
+        guard provider == .claude else { return false }
+        switch refresher.lastError {
+        case .notSignedIn?, .tokenExpired?, .signInExpired?, .http(401)?: return true
+        default: return false
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             HStack(spacing: 7) {
@@ -180,6 +189,7 @@ private struct PlanSection: View {
             }
         } else if provider == .claude, let error = refresher.lastError {
             notice(UsageFeed.claudeProblem(refresher), detail: error.errorDescription)
+            if needsSignIn { signInButton }
         } else if provider == .codex, codex.lastRead != nil {
             notice("No plan limits in Codex's logs this week.",
                    detail: "Codex logs them with each reply when it's signed in with ChatGPT.")
@@ -204,6 +214,23 @@ private struct PlanSection: View {
         }
         .font(.system(size: 11))
         .foregroundStyle(.tertiary)
+        if isStale, needsSignIn {
+            HStack(spacing: 8) {
+                Text(UsageFeed.claudeProblem(refresher))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                signInButton
+            }
+        }
+    }
+
+    /// Opens Menu Bar & Alerts in the window, where Graphitree signs in to Claude.
+    private var signInButton: some View {
+        Button("Sign In…") { MainWindow.show(.usageSettings) }
+            .controlSize(.small)
+            .help("Sign Graphitree in to Claude, so it reads the limits whether or not Claude Code runs.")
     }
 
     private func notice(_ title: String, detail: String?) -> some View {

@@ -5,8 +5,10 @@ enum UsageAPIError: Error, LocalizedError, Equatable {
     case notSignedIn
     /// The keychain prompt for Claude Code's sign-in was turned down.
     case keychainDenied
-    /// Claude Code's token has run out; Claude Code renews it the next time it runs.
+    /// Claude Code's token has run out; only Claude Code's terminal command renews it.
     case tokenExpired
+    /// Graphitree's own sign-in was turned down when it renewed: signed out elsewhere, or too old.
+    case signInExpired
     /// No connection: offline, or Anthropic couldn't be reached.
     case offline
     /// Another connection failure, with URLError's code.
@@ -34,7 +36,8 @@ enum UsageAPIError: Error, LocalizedError, Equatable {
         switch self {
         case .notSignedIn: return "Claude Code isn't signed in on this Mac"
         case .keychainDenied: return "Graphitree wasn't allowed to read Claude Code's sign-in"
-        case .tokenExpired: return "Claude Code's sign-in needs renewing. It renews the next time Claude Code runs"
+        case .tokenExpired: return "Claude Code's sign-in ran out. Sign in to Claude in Graphitree to keep reading"
+        case .signInExpired: return "Graphitree's sign-in to Claude ran out. Sign in again"
         case .offline: return "This Mac can't reach Anthropic right now. It tries again on the next refresh"
         case .network(let code): return "Couldn't reach Anthropic (error \(code))"
         case .http(401): return "Anthropic turned down Claude Code's sign-in. Sign in to Claude Code again"
@@ -178,49 +181,101 @@ enum UsageAPI {
         let token = try await TokenCache.shared.token()
         let (data, status) = try await request(url, token: token.accessToken, beta: beta)
         if status == 401 {
-            // Claude Code may have renewed its token since it was read: read it again once.
-            await TokenCache.shared.forget()
-            let fresh = try await TokenCache.shared.token()
+            // Turned down before it ran out: renew Graphitree's own sign-in, or read Claude Code's
+            // again in case it renewed it since. Once.
+            let fresh = try await TokenCache.shared.renew(after: token)
             guard fresh != token else { throw UsageAPIError.http(401) }
             let (retryData, retryStatus) = try await request(url, token: fresh.accessToken, beta: beta)
-            guard retryStatus == 200 else { throw UsageAPIError.http(retryStatus) }
+            guard retryStatus == 200 else {
+                throw retryStatus == 401 && fresh.isOwn ? UsageAPIError.signInExpired : UsageAPIError.http(retryStatus)
+            }
             return retryData
         }
         guard status == 200 else { throw UsageAPIError.http(status) }
         return data
     }
 
-    /// Keeps the borrowed token in memory while it's good, so the keychain isn't asked every five
-    /// minutes.
+    /// The token requests use: Graphitree's own sign-in when there is one (`ClaudeOAuth`), renewed
+    /// here when it runs out, otherwise Claude Code's, borrowed read only. Kept in memory while
+    /// it's good, so the keychain isn't asked every five minutes.
+    ///
+    /// One read or renewal at a time: callers that arrive meanwhile wait for it. That keeps a
+    /// keychain prompt from showing twice, and a renewal from racing another, which matters
+    /// because each one replaces the refresh token and leaves the other turned down.
     actor TokenCache {
         static let shared = TokenCache()
-        private var current: ClaudeCodeSignIn.Token?
-        /// A keychain read that's under way. Callers that arrive while the prompt is open wait for
-        /// it rather than raising a second prompt.
-        private var pending: Task<Result<ClaudeCodeSignIn.Token, ClaudeCodeSignIn.Failure>, Never>?
 
-        func token() async throws -> ClaudeCodeSignIn.Token {
+        struct Credential: Equatable, Sendable {
+            let accessToken: String
+            let expiresAt: Date?
+            /// Graphitree's own sign-in, not Claude Code's.
+            let isOwn: Bool
+
+            func isExpired(now: Date = Date()) -> Bool {
+                guard let expiresAt else { return false }
+                return expiresAt.timeIntervalSince(now) < 60
+            }
+        }
+
+        private var current: Credential?
+        private var pending: Task<Credential, Error>?
+
+        func token() async throws -> Credential {
             if let current, !current.isExpired() { return current }
-            let read = pending ?? Task { await ClaudeCodeSignIn.readInBackground() }
-            pending = read
-            let result = await read.value
-            pending = nil
-            switch result {
-            case .success(let token):
-                guard !token.isExpired() else {
-                    current = nil
-                    throw UsageAPIError.tokenExpired
+            return try await load(renewingOwn: false)
+        }
+
+        /// After `rejected` was turned down: Graphitree's own sign-in renews even if it hasn't
+        /// run out; Claude Code's is read again.
+        func renew(after rejected: Credential) async throws -> Credential {
+            if current == rejected { current = nil }
+            return try await load(renewingOwn: rejected.isOwn)
+        }
+
+        func forget() { current = nil }
+
+        private func load(renewingOwn: Bool) async throws -> Credential {
+            if let pending { return try await pending.value }
+            let task = Task { try await Self.read(renewingOwn: renewingOwn) }
+            pending = task
+            defer { pending = nil }
+            do {
+                let credential = try await task.value
+                current = credential
+                return credential
+            } catch {
+                current = nil
+                throw error
+            }
+        }
+
+        private static func read(renewingOwn: Bool) async throws -> Credential {
+            let store = ClaudeSignInStore.standard
+            if let own = await store.loadInBackground() {
+                guard renewingOwn || own.isExpired() else { return Credential(own) }
+                do {
+                    let renewed = try await ClaudeOAuth.renew(own)
+                    // Saved before it's used: the old refresh token may already be spent.
+                    try? store.save(renewed)
+                    return Credential(renewed)
+                } catch ClaudeOAuth.Failure.rejected, ClaudeOAuth.Failure.noRefreshToken {
+                    // Spent for good. The next reading borrows Claude Code's sign-in again.
+                    store.clear()
+                    throw UsageAPIError.signInExpired
+                } catch ClaudeOAuth.Failure.failed(let status) {
+                    throw UsageAPIError.http(status)
                 }
-                current = token
-                return token
+            }
+            switch await ClaudeCodeSignIn.readInBackground() {
+            case .success(let token):
+                guard !token.isExpired() else { throw UsageAPIError.tokenExpired }
+                return Credential(accessToken: token.accessToken, expiresAt: token.expiresAt, isOwn: false)
             case .failure(.denied):
                 throw UsageAPIError.keychainDenied
             case .failure:
                 throw UsageAPIError.notSignedIn
             }
         }
-
-        func forget() { current = nil }
     }
 
     private static func request(_ url: URL, token: String, beta: String?) async throws -> (Data, Int) {
@@ -290,5 +345,11 @@ enum UsageAPI {
         if let date = formatter.date(from: string) { return date }
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: string)
+    }
+}
+
+extension UsageAPI.TokenCache.Credential {
+    init(_ tokens: ClaudeTokens) {
+        self.init(accessToken: tokens.accessToken, expiresAt: tokens.expiresAt, isOwn: true)
     }
 }

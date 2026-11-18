@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The Usage page's "Menu Bar & Alerts" sheet: the menu bar item, which limits it and the
-/// desktop widgets show, notifications, and bringing over Claude Usage's history.
+/// The Usage page's "Menu Bar & Alerts" sheet: Graphitree's sign-in to Claude, the menu bar item,
+/// which limits it and the desktop widgets show, notifications, and bringing over Claude Usage's
+/// history.
 struct UsageSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -22,6 +23,8 @@ struct UsageSettingsView: View {
     @State private var loginError: String?
     @State private var importing = false
     @State private var importResult: ClaudeUsageImport.Outcome?
+    @State private var showsSignIn = false
+    @ObservedObject private var refresher = UsageRefresher.shared
 
     private let canImport = ClaudeUsageImport.isAvailable(home: NSHomeDirectory())
 
@@ -44,6 +47,7 @@ struct UsageSettingsView: View {
             Rectangle().fill(Palette.hairline).frame(height: 1)
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
+                    claudeSignIn
                     menuBar
                     shown
                     alerts
@@ -56,6 +60,34 @@ struct UsageSettingsView: View {
         .background(Palette.panel)
         .preferredColorScheme(.dark)
         .tint(Palette.gold)
+    }
+
+    // MARK: Claude sign-in
+
+    private var claudeSignIn: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel("Claude sign-in")
+            VStack(alignment: .leading, spacing: 14) {
+                if refresher.hasOwnSignIn {
+                    row("Graphitree's own sign-in", detail: signedInDetail) {
+                        Button("Sign Out") { Task { await refresher.signOut() } }
+                            .buttonStyle(SoftButtonStyle())
+                    }
+                } else {
+                    row("Borrowing Claude Code's sign-in", detail: "Only Claude Code's terminal command renews it, not the Code tab in Claude's app, so Claude's limits stop about eight hours after it last ran. Sign in to Claude and Graphitree keeps a sign-in of its own.") {
+                        Button("Sign In…") { showsSignIn = true }
+                            .buttonStyle(GoldButtonStyle())
+                    }
+                }
+            }
+            .designCard()
+        }
+        .sheet(isPresented: $showsSignIn) { ClaudeSignInSheet() }
+    }
+
+    private var signedInDetail: String {
+        let account = refresher.profile?.email.map { "Signed in as \($0). " } ?? ""
+        return account + "Graphitree renews it itself, so Claude's limits stay current whether or not Claude Code runs. Signing out goes back to borrowing Claude Code's."
     }
 
     // MARK: Menu bar

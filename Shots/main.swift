@@ -44,7 +44,7 @@ func shoot() async throws {
         throw ShotError(message: "usage: GraphitreeShots <window|firstrun|build|folders|playbook|agents|browse> <out.png> [-key value …]")
     }
     let panel: ShellPanel
-    if arguments[1] == "move" || arguments[1] == "newfolder" || arguments[1] == "labels" || arguments[1] == "usagesettings" {
+    if arguments[1] == "move" || arguments[1] == "newfolder" || arguments[1] == "labels" || arguments[1] == "usagesettings" || arguments[1] == "claudesignin" {
         try await shootSheet(arguments[1], output: URL(fileURLWithPath: arguments[2]))
         return
     }
@@ -205,6 +205,8 @@ func shootSheet(_ kind: String, output: URL) async throws {
     let view: AnyView
     if kind == "usagesettings" {
         view = AnyView(UsageSettingsView())
+    } else if kind == "claudesignin" {
+        view = AnyView(ClaudeSignInSheet())
     } else if kind == "labels" {
         let map = model.folderMap()
         view = AnyView(LabelsSheet(kinds: map?.kinds ?? FolderPurpose.defaults, uses: { kind in map?.folders.filter { $0.purpose == kind }.count ?? 0 }) { _ in })
@@ -216,7 +218,7 @@ func shootSheet(_ kind: String, output: URL) async throws {
     } else {
         view = AnyView(NewFolderSheet(initialName: defaults.string(forKey: "folderName") ?? "", initialRule: defaults.string(forKey: "folderRule") ?? "") { _ in })
     }
-    let height = defaults.double(forKey: "height") > 0 ? defaults.double(forKey: "height") : 720
+    let height = defaults.double(forKey: "height") > 0 ? defaults.double(forKey: "height") : (kind == "claudesignin" ? 400 : 720)
     let size = NSSize(width: kind == "move" || kind == "usagesettings" ? 540 : (kind == "labels" ? 680 : 500),
                       height: kind == "labels" ? 520 : (kind == "usagesettings" ? 640 : height))
     let root = view

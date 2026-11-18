@@ -46,7 +46,7 @@ It removes:
 
 - Graphitree's lines in your AI tools' instructions files, and its MCP server in chat apps. A copy of each file as it was goes to the Trash.
 - The `graphitree` command link, the background job, and the open-at-login job.
-- Its AI keys in the Keychain. These can't be put back.
+- Its AI keys and its own sign-in to Claude in the Keychain. These can't be put back. Claude Code's sign-in stays.
 - Its Privacy & Security permissions. macOS doesn't let it reset the `graphitree` command's own Documents access, which the background job asks for, so if you turned that job on, check System Settings › Privacy & Security › Files & Folders afterwards.
 - The app, its settings, Application Support folder, the folder it shares with its widgets and the widgets' own sandbox folder, caches and logs, and the backup copies it made of other tools' files. All of these go to the Trash.
 
@@ -65,7 +65,8 @@ A downloaded copy is removed from wherever it is, Downloads included. The disk i
 | `~/Library/Application Support/Graphitree/Indexes` | The app | Disposable SQLite indexes. |
 | `~/.claude/projects`, `~/Library/Application Support/Claude/local-agent-mode-sessions` | Claude Code, Claude Desktop | Read only, by the Usage page, to count Claude Code's calls on this Mac. |
 | `~/.codex/sessions`, `~/.codex/archived_sessions` | Codex | Read only, by the Usage page, for Codex's calls and its plan's limits. Compressed logs (`.jsonl.zst`) are read with Homebrew's `zstd` when it's installed. |
-| Keychain item `Claude Code-credentials` | Claude Code | Read only, by the Usage page, to ask Anthropic for the plan's limits. Never refreshed or changed, so it can't sign Claude Code out. |
+| Keychain item `Claude Code-credentials` | Claude Code | Read only, by the Usage page, to ask Anthropic for the plan's limits until you sign Graphitree in to Claude. Never refreshed or changed, so it can't sign Claude Code out. |
+| Keychain item `Graphitree Claude sign-in` | The app | Only once you sign in to Claude in Graphitree. Its own tokens for the plan's limits, renewed by Graphitree. Apart from Claude Code's, so renewing it can't sign Claude Code out. Sign Out in Menu Bar & Alerts deletes it. |
 | `~/Library/Application Support/Graphitree/ClaudeUsage` | The app | The last plan reading, a reading every 5 minutes while the app runs (`usage-history.jsonl`), and a disposable transcript cache. |
 | `~/Library/Group Containers/<team>.com.marcuslai.Graphitree/widget-feed.json` | The app | The latest readings, for the desktop widgets, rewritten after each reading. The widgets only read it. |
 | `~/Library/LaunchAgents/com.marcuslai.Graphitree.menubar.plist` | The app | Only with Open at login on. Starts Graphitree in the menu bar when you log in. |
@@ -95,7 +96,7 @@ The window's toolbar switches between two canvases.
 The Usage page, under AI Models in the rail, is ported from [Claude Usage](https://github.com/MarcusLai07/claude-usage-widget). A switch in its header picks Claude or Codex.
 
 **Claude**
-- **Plan limits**: session, weekly and per-model percentages from `api.anthropic.com/api/oauth/usage`, the endpoint behind Claude Code's `/usage`. They cover the whole account: claude.ai, the desktop app's chat, mobile and Claude Code on every device. The request borrows Claude Code's sign-in from the keychain, read only. Once a reading has worked, Graphitree reads again every 5 minutes while it's open and keeps the history for the left-over-time chart.
+- **Plan limits**: session, weekly and per-model percentages from `api.anthropic.com/api/oauth/usage`, the endpoint behind Claude Code's `/usage`. They cover the whole account: claude.ai, the desktop app's chat, mobile and Claude Code on every device. The request uses Graphitree's own sign-in once you sign in to Claude (**Sign In…** on the Usage page, or in Menu Bar & Alerts): you sign in on Anthropic's page in your browser and paste back the code it shows, and Graphitree renews it itself with `console.anthropic.com/v1/oauth/token`. Until then it borrows Claude Code's sign-in from the keychain, read only. Only Claude Code's terminal command renews that one, not the Code tab in Claude's desktop app, so borrowed readings stop about eight hours after the command last ran. Once a reading has worked, Graphitree reads again every 5 minutes while it's open and keeps the history for the left-over-time chart.
 - **Claude Code on this Mac**: every call from `~/.claude/projects` and Claude Desktop's local-agent sessions, with tokens, cost at Anthropic API list prices, sessions and the Context tab's auto-compact and prompt-cache advice. Chat in claude.ai or the desktop app leaves no transcript, so it shows only in the limits.
 
 **Codex**

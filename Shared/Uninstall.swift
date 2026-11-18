@@ -28,8 +28,10 @@ struct UninstallPlan: Equatable, Sendable {
     /// Background jobs to stop. Their settings files are in `trash`.
     var jobLabels: [String]
     var keychainServices: [String]
-    /// Graphitree's AI keys in the Keychain, under any of `keychainServices`.
+    /// Graphitree's AI keys in the Keychain.
     var keyCount: Int
+    /// Graphitree's own sign-in to Claude is in the Keychain (`ClaudeSignInStore`).
+    var hasClaudeSignIn = false
     /// Preference domains emptied. Their files are in `trash`.
     var preferenceDomains: [String]
     /// Moved to the Trash. Only what exists, the app last.
@@ -42,13 +44,14 @@ struct UninstallPlan: Equatable, Sendable {
     /// First run installed graphify. It stays, but the confirmation says how to remove it.
     var installedGraphify = false
 
-    static let keychainServices = [AIKeychain.standard.service]
+    /// Everything Graphitree keeps in the Keychain: AI keys and its own sign-in to Claude.
+    static let keychainServices = [AIKeychain.standard.service, ClaudeSignInStore.standard.keychain.service]
     /// The same keys the app saves under (`AppModel`, `AgentsView`).
     static let graphFolderKey = "graphOutDirectory"
     static let customAgentFilesKey = "customAgentFiles"
 
     /// The plan for an app at `appURL`. `home` is the home folder, so the checks can use a made-up one.
-    static func make(appURL: URL, bundleIdentifier: String, home: String, graphFolder: String, customFiles: [String], keyCount: Int, installedGraphify: Bool = false) -> UninstallPlan {
+    static func make(appURL: URL, bundleIdentifier: String, home: String, graphFolder: String, customFiles: [String], keyCount: Int, hasClaudeSignIn: Bool = false, installedGraphify: Bool = false) -> UninstallPlan {
         let manager = FileManager.default
         // Not `fileExists`, which follows links: a link into a deleted app still counts.
         func exists(_ path: String) -> Bool { (try? manager.attributesOfItem(atPath: path)) != nil }
@@ -130,6 +133,7 @@ struct UninstallPlan: Equatable, Sendable {
             jobLabels: labels,
             keychainServices: keychainServices,
             keyCount: keyCount,
+            hasClaudeSignIn: hasClaudeSignIn,
             preferenceDomains: domains,
             trash: trash,
             backupCopies: copies.sorted { $0.path < $1.path },
@@ -148,7 +152,8 @@ struct UninstallPlan: Equatable, Sendable {
         let customFiles = (settings?.string(forKey: customAgentFilesKey) ?? "").split(separator: "\n").map(String.init)
         return make(
             appURL: Translocation.originalURL(of: appURL), bundleIdentifier: bundleIdentifier, home: home, graphFolder: graphFolder,
-            customFiles: customFiles, keyCount: Uninstaller.keyAccounts(services: keychainServices).count,
+            customFiles: customFiles, keyCount: Uninstaller.keyAccounts(services: [AIKeychain.standard.service]).count,
+            hasClaudeSignIn: !Uninstaller.keyAccounts(services: [ClaudeSignInStore.standard.keychain.service]).isEmpty,
             installedGraphify: settings?.bool(forKey: GraphifySetup.installedKey) ?? false
         )
     }
@@ -163,6 +168,9 @@ struct UninstallPlan: Equatable, Sendable {
         }
         if keyCount > 0 {
             lines.append("Delete \(keyCount) AI key\(keyCount == 1 ? "" : "s") from the Keychain. Keys can't be put back from the Trash.")
+        }
+        if hasClaudeSignIn {
+            lines.append("Delete Graphitree's own sign-in to Claude from the Keychain. Claude Code's sign-in stays.")
         }
         lines.append("Reset its Privacy & Security permissions")
         var trashLine = "Move the app, its settings, caches and logs to the Trash"
@@ -302,7 +310,7 @@ enum Uninstaller {
             }
         }
 
-        if plan.keyCount > 0 { effects.deleteKeys(plan.keychainServices) }
+        if plan.keyCount > 0 || plan.hasClaudeSignIn { effects.deleteKeys(plan.keychainServices) }
         for domain in plan.preferenceDomains { effects.removeDefaults(domain) }
 
         for url in trash + plan.backupCopies.filter({ !trash.contains($0) }) {

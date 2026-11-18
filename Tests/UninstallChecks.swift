@@ -150,4 +150,16 @@ func uninstallChecks() throws {
     installedForThem.installedGraphify = true
     check(installedForThem.kept.first?.contains("which Graphitree installed") == true && installedForThem.kept.first?.hasSuffix("run uv tool uninstall graphifyy in Terminal.") == true, "graphify that Graphitree installed stays, and the list says how to remove it")
     check(!installedForThem.summary.contains { $0.contains("graphify") }, "and it isn't in what's removed")
+
+    // Graphitree's own sign-in to Claude, without any AI keys.
+    var signedIn = empty
+    signedIn.hasClaudeSignIn = true
+    check(signedIn.summary.contains("Delete Graphitree's own sign-in to Claude from the Keychain. Claude Code's sign-in stays."),
+          "its own sign-in to Claude is listed, and Claude Code's is said to stay")
+    check(UninstallPlan.keychainServices.contains(ClaudeSignInStore.standard.keychain.service), "the sign-in's Keychain service is one uninstalling empties")
+    check(!UninstallPlan.keychainServices.contains(ClaudeCodeSignIn.service), "Claude Code's own Keychain item never is")
+    var signInDeletes: [String] = []
+    let signInEffects = Uninstaller.Effects(trash: { _ in }, run: { _, _ in }, deleteKeys: { signInDeletes += $0 }, removeDefaults: { _ in })
+    _ = Uninstaller.perform(signedIn, effects: signInEffects)
+    check(signInDeletes.contains(ClaudeSignInStore.standard.keychain.service), "with only the sign-in, the Keychain is still emptied of it")
 }
