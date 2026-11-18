@@ -1909,6 +1909,7 @@ try connectionChecks()
 try usageChecks()
 try usageSummaryChecks()
 try codexChecks()
+try copilotChecks()
 try menuBarAndWidgetChecks()
 
 // MARK: - Uninstall
