@@ -114,7 +114,7 @@ struct PanelContent: View {
         case .agents:
             AgentsView()
         case .usage:
-            UsageView()
+            UsageView(openModels: { open(.agents) })
         case .playbook:
             PlaybookView(openModels: { open(.agents) })
         case .insights:

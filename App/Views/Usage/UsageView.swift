@@ -15,8 +15,9 @@ enum UsageTab: String, CaseIterable, Identifiable {
 }
 
 /// The Usage page: a plan's limits (always "now") and its coding tool's activity on this Mac, for
-/// Claude or Codex, laid out as Claude Usage's window, which follows Magpie's. The provider switch
-/// sits in the header, then one toolbar row (tabs, period, refresh, the period's cost), then the tab.
+/// each tool AI Models lists under Connected, laid out as Claude Usage's window, which follows
+/// Magpie's. The provider switch sits in the header, then one toolbar row (tabs, period, refresh,
+/// the period's cost), then the tab.
 struct UsageView: View {
     @ObservedObject private var refresher = UsageRefresher.shared
     @ObservedObject private var claudeTrends = TrendModel.claude
@@ -24,8 +25,12 @@ struct UsageView: View {
     @ObservedObject private var claudeAnalytics = AnalyticsModel.claude
     @ObservedObject private var codexAnalytics = AnalyticsModel.codex
     @ObservedObject private var router = AppRouter.shared
+    @ObservedObject private var shown = ShownProviders.shared
 
-    @AppStorage(ClaudeUsageStore.Key.provider) private var provider: UsageProvider = .claude
+    /// Opens AI Models, where tools are connected.
+    var openModels: () -> Void = {}
+
+    @AppStorage(ClaudeUsageStore.Key.provider) private var savedProvider: UsageProvider = .claude
     @AppStorage(ClaudeUsageStore.Key.showLeft) private var showLeft = false
     @AppStorage(ClaudeUsageStore.Key.hideAccount) private var hideAccount = false
     @AppStorage(ClaudeUsageStore.Key.period) private var period: UsagePeriod = .week
@@ -40,6 +45,9 @@ struct UsageView: View {
     private static var startTab: UsageTab {
         UserDefaults.standard.string(forKey: "usageTab").flatMap(UsageTab.init(rawValue:)) ?? .overview
     }
+
+    /// The provider picked on the switch, or the first shown one when it isn't shown any more.
+    private var provider: UsageProvider { shown.pick(savedProvider) ?? savedProvider }
 
     private var analytics: AnalyticsModel { provider == .claude ? claudeAnalytics : codexAnalytics }
     private var trends: TrendModel { provider == .claude ? claudeTrends : codexTrends }
@@ -60,6 +68,7 @@ struct UsageView: View {
     private var shownTab: UsageTab { tabs.contains(tab) ? tab : .overview }
 
     private var subtitle: String {
+        if shown.providers.isEmpty { return "Plan limits and activity for the AI tools you've connected" }
         switch provider {
         case .claude: return "Claude's plan limits, and what Claude Code used on this Mac"
         case .codex: return "Codex's plan limits and what it used on this Mac, from its own logs"
@@ -78,27 +87,34 @@ struct UsageView: View {
                     }
                     .buttonStyle(SoftButtonStyle())
                     .help("The menu bar item, desktop widgets and notifications")
-                    providerSwitch
+                    if shown.providers.count > 1 { providerSwitch }
                 }
             }
             Rectangle().fill(Palette.hairline).frame(height: 1)
-            toolbar
-                .padding(.horizontal, 18)
-                .padding(.vertical, 10)
-            Rectangle().fill(Palette.hairline).frame(height: 1)
-            // A new provider starts its tabs afresh: a filter on one's sessions would hide the other's.
-            content
-                .id("\(provider.rawValue)-\(rangeTick)")
+            if shown.providers.isEmpty {
+                nothingConnected
+            } else {
+                toolbar
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                Rectangle().fill(Palette.hairline).frame(height: 1)
+                // A new provider starts its tabs afresh: a filter on one's sessions would hide the other's.
+                content
+                    .id("\(provider.rawValue)-\(rangeTick)")
+            }
         }
         .environmentObject(refresher)
         // Claude's readings borrow Claude Code's sign-in, which can raise the keychain prompt, so
         // they start only once Claude is shown.
-        .onAppear { if provider == .claude { refresher.start() } }
+        .onAppear {
+            shown.refresh()
+            if provider == .claude, shown.contains(.claude) { refresher.start() }
+        }
         .onChange(of: provider) { _, new in
             sessionFilter = nil
-            if new == .claude { refresher.start() }
+            if new == .claude, shown.contains(.claude) { refresher.start() }
         }
-        .task(id: reloadKey) { await keepCurrent() }
+        .task(id: reloadKey) { if !shown.providers.isEmpty { await keepCurrent() } }
         .sheet(isPresented: $router.showsUsageSettings) {
             UsageSettingsView()
         }
@@ -125,9 +141,30 @@ struct UsageView: View {
         }
     }
 
+    /// No tool is listed under Connected in AI Models, so there's no usage to show.
+    private var nothingConnected: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "gauge.with.dots.needle.0percent")
+                .font(.system(size: 28))
+                .foregroundStyle(Palette.gold)
+            Text("No AI tool connected")
+                .font(.system(size: 15, weight: .semibold))
+            Text("Usage shows the plan limits and activity of the tools AI Models lists under Connected. Connect one there, and its usage shows here.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+            Button("Open AI Models", action: openModels)
+                .buttonStyle(GoldButtonStyle())
+                .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(40)
+    }
+
     private var providerSwitch: some View {
-        Picker("Provider", selection: $provider) {
-            ForEach(UsageProvider.allCases) { Text($0.name).tag($0) }
+        Picker("Provider", selection: Binding(get: { provider }, set: { savedProvider = $0 })) {
+            ForEach(shown.providers) { Text($0.name).tag($0) }
         }
         .pickerStyle(.segmented)
         .labelsHidden()

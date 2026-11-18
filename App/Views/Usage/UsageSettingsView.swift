@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// The Usage page's "Menu Bar & Alerts" sheet: Graphitree's sign-in to Claude, the menu bar item,
-/// which limits it and the desktop widgets show, notifications, and bringing over Claude Usage's
-/// history.
+/// which limits it and the desktop widgets show, and notifications.
 struct UsageSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -17,16 +16,12 @@ struct UsageSettingsView: View {
     @AppStorage(UsageAlerts.Key.resetReminder) private var resetReminder = true
     @AppStorage(UsageAlerts.Key.reminderHours) private var reminderHours = 12
     @AppStorage(UsageAlerts.Key.reminderMinLeft) private var reminderMinLeft = 40.0
-    @AppStorage(ClaudeUsageImport.doneKey) private var importedClaudeUsage = false
 
     @State private var opensAtLogin = MenuBarSettings.opensAtLogin
     @State private var loginError: String?
-    @State private var importing = false
-    @State private var importResult: ClaudeUsageImport.Outcome?
     @State private var showsSignIn = false
     @ObservedObject private var refresher = UsageRefresher.shared
-
-    private let canImport = ClaudeUsageImport.isAvailable(home: NSHomeDirectory())
+    @ObservedObject private var shownTools = ShownProviders.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,7 +46,6 @@ struct UsageSettingsView: View {
                     menuBar
                     shown
                     alerts
-                    if canImport { claudeUsage }
                 }
                 .padding(18)
             }
@@ -106,8 +100,8 @@ struct UsageSettingsView: View {
                     DockPresence.update()
                 }
                 row("Beside the icon", detail: "Session over Weekly, as used or left like the Usage page.") {
-                    Picker("", selection: $figures) {
-                        ForEach(MenuBarFigures.allCases) { Text($0.title).tag($0) }
+                    Picker("", selection: Binding(get: { figures.effective(shown: shownTools.providers) }, set: { figures = $0 })) {
+                        ForEach(MenuBarFigures.choices(shown: shownTools.providers)) { Text($0.title).tag($0) }
                     }
                     .labelsHidden()
                     .fixedSize()
@@ -212,54 +206,6 @@ struct UsageSettingsView: View {
             }
             Slider(value: value, in: 50...95, step: 5)
                 .controlSize(.small)
-        }
-    }
-
-    // MARK: Claude Usage
-
-    private var claudeUsage: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionLabel("Moving from Claude Usage")
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Claude Usage's readings can join Graphitree's, so the left-over-time charts and past weeks carry on. macOS asks once to let Graphitree read Claude Usage's data. Claude Usage keeps its own copy.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 10) {
-                    Button(importedClaudeUsage ? "Import Again" : "Import History from Claude Usage", action: runImport)
-                        .buttonStyle(SoftButtonStyle())
-                        .disabled(importing)
-                    if importing { ProgressView().controlSize(.small) }
-                    if let importResult { Text(resultText(importResult)).font(.system(size: 12)).foregroundStyle(.secondary) }
-                }
-            }
-            .designCard()
-        }
-    }
-
-    private func runImport() {
-        importing = true
-        importResult = nil
-        let home = NSHomeDirectory()
-        Task {
-            let outcome = await Task.detached(priority: .userInitiated) { ClaudeUsageImport.run(home: home) }.value
-            importing = false
-            importResult = outcome
-            if case .imported = outcome {
-                importedClaudeUsage = true
-                await TrendModel.claude.reload()
-                UsageFeed.shared.claudeHistoryChanged()
-            }
-        }
-    }
-
-    private func resultText(_ outcome: ClaudeUsageImport.Outcome) -> String {
-        switch outcome {
-        case .imported(let added, let since):
-            let start = since.map { ", back to \($0.formatted(.dateTime.month(.abbreviated).day().year()))" } ?? ""
-            return added == 0 ? "Nothing new to add." : "Added \(added.formatted()) readings\(start)."
-        case .nothingFound: return "Claude Usage has no readings to bring over."
-        case .failed(let message): return message
         }
     }
 

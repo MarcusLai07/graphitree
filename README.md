@@ -70,7 +70,6 @@ A downloaded copy is removed from wherever it is, Downloads included. The disk i
 | `~/Library/Application Support/Graphitree/ClaudeUsage` | The app | The last plan reading, a reading every 5 minutes while the app runs (`usage-history.jsonl`), and a disposable transcript cache. |
 | `~/Library/Group Containers/<team>.com.marcuslai.Graphitree/widget-feed.json` | The app | The latest readings, for the desktop widgets, rewritten after each reading. The widgets only read it. |
 | `~/Library/LaunchAgents/com.marcuslai.Graphitree.menubar.plist` | The app | Only with Open at login on. Starts Graphitree in the menu bar when you log in. |
-| Claude Usage's `usage-history.jsonl`, in its group folder | Claude Usage | Read only when you choose Import History from Claude Usage. macOS asks first. |
 
 To query the cleaned graph: `graphify query "<question>" --graph graphify-out/graph.clean.json`
 
@@ -93,7 +92,7 @@ The window's toolbar switches between two canvases.
 
 ## Usage
 
-The Usage page, under AI Models in the rail, is ported from [Claude Usage](https://github.com/MarcusLai07/claude-usage-widget). A switch in its header picks Claude or Codex.
+The Usage page, under AI Models in the rail, is ported from [Claude Usage](https://github.com/MarcusLai07/claude-usage-widget). It shows the AI tools AI Models lists under Connected, today Claude and Codex, and a switch in its header picks one when there's more than one. A tool that isn't listed there doesn't show on the page, in the menu bar, on the widgets or in alerts.
 
 **Claude**
 - **Plan limits**: session, weekly and per-model percentages from `api.anthropic.com/api/oauth/usage`, the endpoint behind Claude Code's `/usage`. They cover the whole account: claude.ai, the desktop app's chat, mobile and Claude Code on every device. The request uses Graphitree's own sign-in once you sign in to Claude (**Sign In…** on the Usage page, or in Menu Bar & Alerts): you sign in on Anthropic's page in your browser and paste back the code it shows, and Graphitree renews it itself with `console.anthropic.com/v1/oauth/token`. Until then it borrows Claude Code's sign-in from the keychain, read only. Only Claude Code's terminal command renews that one, not the Code tab in Claude's desktop app, so borrowed readings stop about eight hours after the command last ran. Once a reading has worked, Graphitree reads again every 5 minutes while it's open and keeps the history for the left-over-time chart.
@@ -107,10 +106,9 @@ The Usage page, under AI Models in the rail, is ported from [Claude Usage](https
 
 The Usage page's **Menu Bar & Alerts** button sets these up.
 
-- **Menu bar**: Graphitree's mark with Session over Weekly beside it, for Claude or Codex. Its menu shows each plan's limits, resets and pace. While it's on, Graphitree keeps running when you close its window and leaves the Dock until you open it again; quit it from the menu. **Open at login** starts it in the menu bar only.
-- **Desktop widgets**: Plan Limits as bars or rings, small, medium or large, for Claude or Codex (edit the widget to pick). The large bars add the week's left-over-time curve. macOS requires widgets to be sandboxed, which keeps Claude Code's sign-in and Codex's logs out of their reach, so Graphitree writes its readings to a folder it shares with them and they draw that. They're as current as Graphitree's last reading; when Graphitree isn't running they say so.
+- **Menu bar**: Graphitree's mark with Session over Weekly beside it, for a connected tool you pick. Its menu shows each connected tool's limits, resets and pace. While it's on, Graphitree keeps running when you close its window and leaves the Dock until you open it again; quit it from the menu. **Open at login** starts it in the menu bar only.
+- **Desktop widgets**: Plan Limits as bars or rings, small, medium or large, for a connected tool (edit the widget to pick; it offers only connected ones). The large bars add the week's left-over-time curve. macOS requires widgets to be sandboxed, which keeps Claude Code's sign-in and Codex's logs out of their reach, so Graphitree writes its readings to a folder it shares with them and they draw that. They're as current as Graphitree's last reading; when Graphitree isn't running they say so.
 - **Notifications**: when a window passes the share you set (80% to start), when one reaches its limit, when the week is on pace to run out more than six hours early, and when the week is about to reset with much of it unused. Each comes once per cycle, and clicking it opens the Usage page.
-- **Moving from Claude Usage**: Import History from Claude Usage adds its readings to Graphitree's, so the left-over-time chart and past weeks carry on.
 
 ## Credits
 

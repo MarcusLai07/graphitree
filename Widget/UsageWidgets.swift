@@ -18,14 +18,27 @@ enum WidgetPlan: String, AppEnum {
         .codex: "Codex",
     ]
 
-    var provider: UsageProvider { self == .claude ? .claude : .codex }
+    var provider: UsageProvider { UsageProvider(rawValue: rawValue) ?? .claude }
+}
+
+/// The plans to pick from: the ones Graphitree shows, which are the tools AI Models lists under
+/// Connected. Every plan before Graphitree has written its first feed.
+struct PlanOptions: DynamicOptionsProvider {
+    func results() async throws -> [WidgetPlan] {
+        guard let feed = WidgetFeedStore.read() else { return WidgetPlan.allCases }
+        return feed.providers.compactMap { WidgetPlan(rawValue: $0.rawValue) }
+    }
+
+    func defaultResult() async -> WidgetPlan? {
+        (try? await results())?.first
+    }
 }
 
 struct PlanIntent: WidgetConfigurationIntent {
     static let title: LocalizedStringResource = "Plan"
     static let description = IntentDescription("Whose plan limits the widget shows.")
 
-    @Parameter(title: "Plan", default: .claude)
+    @Parameter(title: "Plan", default: .claude, optionsProvider: PlanOptions())
     var plan: WidgetPlan
 
     init() {}
@@ -98,8 +111,7 @@ extension UsageEntry {
             weeklyOpus: nil, weeklySonnet: nil, extra: nil
         )
         let plan = WidgetFeed.Plan(snapshot: snapshot, name: provider == .claude ? "Max" : "ChatGPT Plus")
-        let feed = WidgetFeed(written: date, showLeft: false, metrics: [.session, .weekly],
-                              claude: provider == .claude ? plan : nil, codex: provider == .codex ? plan : nil)
+        let feed = WidgetFeed(written: date, showLeft: false, metrics: [.session, .weekly], plans: [provider: plan])
         return UsageEntry(date: date, provider: provider, feed: feed)
     }
 }
@@ -203,6 +215,9 @@ struct NoReadingView: View {
 
     private var message: String {
         guard let feed = entry.feed else { return "Open Graphitree to see your plan's limits here." }
+        if feed.plan(entry.provider) == nil {
+            return "\(entry.provider.toolName) isn't connected in Graphitree's AI Models. Edit the widget to pick another plan."
+        }
         if entry.snapshot != nil, feed.kinds(entry.provider).isEmpty {
             return "No windows picked. Choose them in Graphitree's Menu Bar & Alerts."
         }

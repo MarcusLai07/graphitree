@@ -1,28 +1,5 @@
 import Foundation
 
-/// Whose figures sit beside the menu bar icon.
-enum MenuBarFigures: String, CaseIterable, Identifiable {
-    case claude, codex, none
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .claude: return "Claude"
-        case .codex: return "Codex"
-        case .none: return "Icon only"
-        }
-    }
-
-    var provider: UsageProvider? {
-        switch self {
-        case .claude: return .claude
-        case .codex: return .codex
-        case .none: return nil
-        }
-    }
-}
-
 /// The menu bar item's visibility as AppKit last reported it. Kept in memory only, so a hide from
 /// outside lasts until Graphitree quits, the setting changes, or whatever hid it shows it again.
 @MainActor

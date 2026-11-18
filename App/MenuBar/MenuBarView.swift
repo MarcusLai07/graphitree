@@ -8,8 +8,12 @@ struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
     @ObservedObject private var refresher = UsageRefresher.shared
     @ObservedObject private var codex = CodexLimits.shared
-    @AppStorage(MenuBarSettings.Key.figures) private var figures: MenuBarFigures = .claude
+    @AppStorage(MenuBarSettings.Key.figures) private var savedFigures: MenuBarFigures = .claude
+    @ObservedObject private var shown = ShownProviders.shared
     @AppStorage(ClaudeUsageStore.Key.showLeft) private var showLeft = false
+
+    /// The saved choice, or the first shown provider when the saved one isn't shown any more.
+    private var figures: MenuBarFigures { savedFigures.effective(shown: shown.providers) }
 
     var body: some View {
         Image(nsImage: MenuBarIcon.label(MenuBarIcon.figures(snapshot, showLeft: showLeft)))
@@ -42,6 +46,7 @@ struct MenuBarLabel: View {
 struct MenuBarView: View {
     @ObservedObject private var refresher = UsageRefresher.shared
     @ObservedObject private var codex = CodexLimits.shared
+    @ObservedObject private var shown = ShownProviders.shared
     @AppStorage(ClaudeUsageStore.Key.showLeft) private var showLeft = false
     @AppStorage(MenuBarSettings.Key.metrics) private var metricsText = MenuBarSettings.defaultMetricsText
     @State private var isRefreshing = false
@@ -49,11 +54,20 @@ struct MenuBarView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider().padding(.horizontal, 12)
-            PlanSection(provider: .claude, metrics: MenuBarSettings.parse(metricsText), showLeft: showLeft)
-            if codex.hasSessions {
+            // The tools AI Models lists under Connected, in the Usage page's order.
+            ForEach(shown.providers) { provider in
                 Divider().padding(.horizontal, 12)
-                PlanSection(provider: .codex, metrics: [.session, .weekly], showLeft: showLeft)
+                PlanSection(provider: provider, metrics: provider == .claude ? MenuBarSettings.parse(metricsText) : [.session, .weekly],
+                            showLeft: showLeft)
+            }
+            if shown.providers.isEmpty {
+                Divider().padding(.horizontal, 12)
+                Text("Connect an AI tool in Graphitree's AI Models to see its plan's limits here.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.init(top: 11, leading: 14, bottom: 12, trailing: 14))
             }
             Divider()
                 .padding(.top, 2)
@@ -190,6 +204,8 @@ private struct PlanSection: View {
         } else if provider == .claude, let error = refresher.lastError {
             notice(UsageFeed.claudeProblem(refresher), detail: error.errorDescription)
             if needsSignIn { signInButton }
+        } else if provider == .codex, codex.lastRead != nil, !codex.hasSessions {
+            notice("Codex hasn't run on this Mac.", detail: "Its limits show here once it has replied.")
         } else if provider == .codex, codex.lastRead != nil {
             notice("No plan limits in Codex's logs this week.",
                    detail: "Codex logs them with each reply when it's signed in with ChatGPT.")

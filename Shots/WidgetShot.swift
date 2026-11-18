@@ -61,7 +61,7 @@ private func storedFeed(now: Date, showLeft: Bool) -> WidgetFeed {
         claude.problem = UsageFeed.claudeProblem(refresher)
     }
     return WidgetFeed(written: now, showLeft: showLeft, metrics: MenuBarSettings.metrics,
-                      claude: claude, codex: WidgetFeed.Plan(problem: "Codex hasn't run on this Mac."))
+                      plans: [.claude: claude, .codex: WidgetFeed.Plan(problem: "Codex hasn't run on this Mac.")])
 }
 
 /// Made-up figures: a week used steadily, for the README.
@@ -85,7 +85,7 @@ private func sampleFeed(now: Date, showLeft: Bool) -> WidgetFeed {
                                                         weekly: UsageWindow(utilization: 31, resetsAt: weeklyReset),
                                                         weeklyOpus: nil, weeklySonnet: nil, extra: nil),
                                 name: "ChatGPT Plus")
-    return WidgetFeed(written: now, showLeft: showLeft, metrics: [.session, .weekly, .weeklyFable], claude: claude, codex: codex)
+    return WidgetFeed(written: now, showLeft: showLeft, metrics: [.session, .weekly, .weeklyFable], plans: [.claude: claude, .codex: codex])
 }
 
 // MARK: - Drawing

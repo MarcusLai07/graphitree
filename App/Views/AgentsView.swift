@@ -258,7 +258,7 @@ struct AgentsView: View {
     private var connectedKeys: [String] {
         var keys = model.aiOptions.map(\.id)
         for tool in AICatalog.codingTools where !keys.contains(toolKey(tool)) {
-            if let state = toolStates[tool.id], state.isInstalled, state.builds || state.reads { keys.append(toolKey(tool)) }
+            if let state = toolStates[tool.id], state.isListed { keys.append(toolKey(tool)) }
         }
         return keys
     }
@@ -1103,6 +1103,8 @@ struct AgentsView: View {
         var tools: [String: CodingToolState] = [:]
         for tool in AICatalog.codingTools { tools[tool.id] = CodingToolState.read(tool, home: home) }
         toolStates = tools
+        // The Usage page, menu bar and widgets show the tools listed here.
+        ShownProviders.shared.refresh()
 
         var chats: [String: ChatState] = [:]
         for app in AICatalog.chatApps {

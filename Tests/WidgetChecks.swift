@@ -1,9 +1,9 @@
 import Foundation
 
 // Checks for what the menu bar and widgets stand on: the feed the app writes for the widgets,
-// the notifications' rules, the open-at-login job, bringing over Claude Usage's history, and
-// noticing Codex's new logs. Everything runs in a made-up home folder; nothing here reads the
-// real app group, Claude Usage's folder or Graphitree's history. Called from main.swift.
+// the notifications' rules, the open-at-login job, and noticing Codex's new logs. Everything runs
+// in a made-up home folder; nothing here reads the real app group or Graphitree's history. Called
+// from main.swift.
 
 func menuBarAndWidgetChecks() throws {
     let manager = FileManager.default
@@ -25,8 +25,8 @@ func menuBarAndWidgetChecks() throws {
                                  weekly: UsageWindow(utilization: 13, resetsAt: weeklyReset),
                                  weeklyOpus: nil, weeklySonnet: nil, extra: nil)
     var feed = WidgetFeed(written: now, showLeft: false, metrics: [.session, .weekly, .weeklyFable],
-                          claude: WidgetFeed.Plan(snapshot: snapshot, name: "Max 5x"),
-                          codex: WidgetFeed.Plan(problem: "Codex hasn't run on this Mac."))
+                          plans: [.claude: WidgetFeed.Plan(snapshot: snapshot, name: "Max 5x"),
+                                  .codex: WidgetFeed.Plan(problem: "Codex hasn't run on this Mac.")])
     let encoded = WidgetFeedStore.encode(feed)
     expectEqual(encoded.flatMap(WidgetFeedStore.decode), feed, "the feed reads back as written")
     expectEqual(feed.kinds(.claude), [.session, .weekly, .weeklyFable], "Claude's widgets show the windows picked")
@@ -39,6 +39,48 @@ func menuBarAndWidgetChecks() throws {
     later.showLeft = true
     check(!later.sameContent(as: feed), "switching to Left redraws them")
     check(!feed.sameContent(as: nil), "the first feed always draws")
+    expectEqual(feed.providers, [.claude, .codex], "the feed lists its plans in the switch's order")
+    let claudeOnly = WidgetFeed(written: now, showLeft: false, metrics: [.session], plans: [.claude: WidgetFeed.Plan(name: "Max 5x")])
+    check(claudeOnly.plan(.codex) == nil && claudeOnly.providers == [.claude], "a tool that isn't shown has no plan in the feed, so the widget doesn't offer it")
+    // A feed 0.2.2 wrote, read by the new widget before the new app writes again.
+    let olderFeed = Data(#"{"claude":{"isStale":false,"name":"Max 5x"},"codex":{"isStale":false,"problem":"Codex hasn't run on this Mac."},"metrics":["session","weekly"],"showLeft":false,"written":"2026-11-18T12:00:00Z"}"#.utf8)
+    let readOlder = WidgetFeedStore.decode(olderFeed)
+    expectEqual(readOlder?.plan(.claude)?.name, "Max 5x", "an older feed's Claude plan still reads")
+    expectEqual(readOlder?.providers, [.claude, .codex], "and so does its Codex plan")
+    check(String(decoding: WidgetFeedStore.encode(claudeOnly) ?? Data(), as: UTF8.self).contains(#""plans":{"claude""#), "a new feed keeps plans by provider")
+
+    // MARK: Which tools show
+
+    let toolsHome = manager.temporaryDirectory.appendingPathComponent("graphitree-tools-\(UUID().uuidString)")
+    defer { try? manager.removeItem(at: toolsHome) }
+    let toolsBin = toolsHome.appendingPathComponent(".local/bin")
+    try manager.createDirectory(at: toolsBin, withIntermediateDirectories: true)
+    func install(_ command: String) throws {
+        let path = toolsBin.appendingPathComponent(command).path
+        try "#!/bin/sh\n".write(toFile: path, atomically: true, encoding: .utf8)
+        try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+    }
+    try install("codex")
+    check(!UsageProvider.shown(home: toolsHome.path).contains(.codex), "Codex installed without graphify's skill or Graphitree's pointer isn't listed under Connected, so its usage doesn't show")
+    let codexSkill = toolsHome.appendingPathComponent(".codex/skills/graphify/SKILL.md")
+    try manager.createDirectory(at: codexSkill.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try "skill".write(to: codexSkill, atomically: true, encoding: .utf8)
+    check(UsageProvider.shown(home: toolsHome.path).contains(.codex), "with graphify's skill in it, as AI Models lists it under Connected, it shows")
+    let codexState = CodingToolState(isInstalled: true, builds: true, reads: false)
+    check(codexState.isListed && !codexState.isConnected, "the skill alone lists a tool under Connected, though setup isn't finished")
+    try install("claude")
+    check(UsageProvider.shown(home: toolsHome.path).contains(.claude), "Claude Code shows once Graphitree can build with it, skill or not")
+    expectEqual(UsageProvider.shown(home: toolsHome.path), [.claude, .codex], "shown tools keep the switch's order")
+
+    // MARK: Beside the menu bar icon
+
+    expectEqual(MenuBarFigures(rawValue: "codex"), .provider(.codex), "a saved provider reads back")
+    expectEqual(MenuBarFigures(rawValue: "none"), MenuBarFigures.none, "and so does the icon alone")
+    check(MenuBarFigures(rawValue: "cursor") == nil, "an unknown saved value falls back to the default")
+    expectEqual(MenuBarFigures.choices(shown: [.claude]).map(\.rawValue), ["claude", "none"], "the picker offers the shown tools, then the icon alone")
+    expectEqual(MenuBarFigures.provider(.codex).effective(shown: [.claude]), .claude, "a tool no longer shown gives way to the first shown one")
+    expectEqual(MenuBarFigures.provider(.codex).effective(shown: []), MenuBarFigures.none, "with none shown, only the icon")
+    expectEqual(MenuBarFigures.none.effective(shown: [.claude]), MenuBarFigures.none, "the icon alone stays the icon alone")
 
     // MARK: The week's curve
 
@@ -138,31 +180,6 @@ func menuBarAndWidgetChecks() throws {
     expectEqual(MenuBarAgent.installedExecutable(home: home.path), executable, "and names the app it starts")
     MenuBarAgent.remove(home: home.path)
     check(!MenuBarAgent.isInstalled(home: home.path), "turning it off removes it")
-
-    // MARK: Claude Usage's history
-
-    let containers = home.appendingPathComponent("Library/Group Containers")
-    for name in ["group.com.marcuslai.ClaudeUsage", "ABCDE12345.com.marcuslai.ClaudeUsage", "ABCDE12345.com.example.Other"] {
-        try manager.createDirectory(at: containers.appendingPathComponent(name), withIntermediateDirectories: true)
-    }
-    expectEqual(ClaudeUsageImport.folders(home: home.path).map(\.lastPathComponent),
-                ["ABCDE12345.com.marcuslai.ClaudeUsage", "group.com.marcuslai.ClaudeUsage"], "Claude Usage's current folder is read before its old one, and no other app's")
-    let lines = """
-    {"ts":"2026-06-10T19:44:10Z","weekly":14,"sonnet":0,"session":42}
-    not a reading
-    {"session":43,"weekly":14,"ts":"2026-06-10T19:49:11Z","sonnet":0}
-
-    """
-    let imported = ClaudeUsageImport.samples(in: lines)
-    expectEqual(imported.map(\.session), [42, 43], "Claude Usage's lines read as Graphitree's, skipping what doesn't")
-    let mine = [UsageSample(ts: utc("2026-11-17T10:00:00Z"), session: 10, weekly: 5, opus: nil, sonnet: nil, fable: nil,
-                            sessionReset: nil, weeklyReset: nil, fableReset: nil, opusReset: nil, sonnetReset: nil)]
-    let overlapping = UsageSample(ts: utc("2026-11-17T10:01:30Z"), session: 10, weekly: 5, opus: nil, sonnet: nil, fable: nil,
-                                  sessionReset: nil, weeklyReset: nil, fableReset: nil, opusReset: nil, sonnetReset: nil)
-    let merged = ClaudeUsageImport.merge(existing: mine, incoming: imported + [overlapping] + imported)
-    expectEqual(merged.added, 2, "each older reading is added once, and one taken by both apps at the same moment isn't")
-    expectEqual(merged.samples.map(\.ts), [utc("2026-06-10T19:44:10Z"), utc("2026-06-10T19:49:11Z"), utc("2026-11-17T10:00:00Z")], "the history stays oldest first")
-    expectEqual(ClaudeUsageImport.samples(in: ClaudeUsageImport.lines(merged.samples)).map(\.ts), merged.samples.map(\.ts), "the merged history reads back")
 
     // MARK: Codex's new logs
 

@@ -46,11 +46,50 @@ struct WidgetFeed: Codable, Equatable {
     var showLeft: Bool
     /// The windows Claude's widgets show, in order. Codex has only Session and Weekly.
     var metrics: [MetricKind]
-    var claude: Plan?
-    var codex: Plan?
+    /// Each shown provider's plan, by `UsageProvider.rawValue`. Only the tools AI Models lists
+    /// under Connected are here, so the widget offers only those.
+    var plans: [String: Plan]
 
-    func plan(_ provider: UsageProvider) -> Plan? {
-        provider == .claude ? claude : codex
+    init(written: Date, showLeft: Bool, metrics: [MetricKind], plans: [UsageProvider: Plan]) {
+        self.written = written
+        self.showLeft = showLeft
+        self.metrics = metrics
+        self.plans = Dictionary(uniqueKeysWithValues: plans.map { ($0.key.rawValue, $0.value) })
+    }
+
+    func plan(_ provider: UsageProvider) -> Plan? { plans[provider.rawValue] }
+
+    /// The providers with a plan here, in the switch's order.
+    var providers: [UsageProvider] { UsageProvider.allCases.filter { plans[$0.rawValue] != nil } }
+
+    private enum CodingKeys: String, CodingKey {
+        case written, showLeft, metrics, plans
+        /// 0.2.2 and before: one field per provider.
+        case claude, codex
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        written = try container.decode(Date.self, forKey: .written)
+        showLeft = try container.decode(Bool.self, forKey: .showLeft)
+        metrics = try container.decode([MetricKind].self, forKey: .metrics)
+        if let plans = try container.decodeIfPresent([String: Plan].self, forKey: .plans) {
+            self.plans = plans
+        } else {
+            // A feed an older Graphitree wrote, read by a newer widget before the app writes again.
+            var plans: [String: Plan] = [:]
+            plans[UsageProvider.claude.rawValue] = try container.decodeIfPresent(Plan.self, forKey: .claude)
+            plans[UsageProvider.codex.rawValue] = try container.decodeIfPresent(Plan.self, forKey: .codex)
+            self.plans = plans
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(written, forKey: .written)
+        try container.encode(showLeft, forKey: .showLeft)
+        try container.encode(metrics, forKey: .metrics)
+        try container.encode(plans, forKey: .plans)
     }
 
     /// The windows a provider's widgets show.

@@ -50,6 +50,7 @@ final class CodexLimits: ObservableObject {
             reading = nil
             plan = nil
             history = []
+            lastRead = started
             return false
         }
         guard let scan = outcome.scan else { return false }
@@ -85,8 +86,9 @@ final class UsageFeed {
     func start() {
         guard Self.isEnabled, timer == nil else { return }
         let refresher = UsageRefresher.shared
-        // Keeps the plan-limit history going once the Usage page has read it before.
-        refresher.startIfEnabled()
+        // Keeps the plan-limit history going once the Usage page has read it before, while AI
+        // Models lists Claude Code.
+        if ShownProviders.shared.contains(.claude) { refresher.startIfEnabled() }
         refresher.$lastAttempt
             .dropFirst()
             .sink { [weak self] _ in self?.claudeDidRead() }
@@ -97,7 +99,10 @@ final class UsageFeed {
             .sink { [weak self] _ in self?.settingsChanged() }
             .store(in: &observers)
         let timer = Timer(timeInterval: UsageRefresher.refreshInterval, repeats: true) { _ in
-            Task { @MainActor in await UsageFeed.shared.readCodex() }
+            Task { @MainActor in
+                ShownProviders.shared.refresh()
+                await UsageFeed.shared.readCodex()
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
@@ -112,23 +117,36 @@ final class UsageFeed {
         pending?.cancel()
     }
 
-    /// Both plans read again now, for the popover's refresh button. Claude only once its
+    /// Every shown plan read again now, for the popover's refresh button. Claude only once its
     /// readings have started, so the button never raises the keychain prompt by surprise.
     func refreshAll() async {
         let refresher = UsageRefresher.shared
-        if refresher.isRunning { await refresher.refresh(force: true) }
+        if refresher.isRunning, ShownProviders.shared.contains(.claude) { await refresher.refresh(force: true) }
         await readCodex(force: true)
+    }
+
+    /// AI Models now lists other tools: start reading the ones that joined, and redraw the
+    /// widgets with only the shown ones.
+    func shownChanged() {
+        guard timer != nil else { return }
+        if ShownProviders.shared.contains(.claude) { UsageRefresher.shared.startIfEnabled() }
+        Task { await readCodex(force: true) }
     }
 
     private func claudeDidRead() {
         let refresher = UsageRefresher.shared
-        if refresher.lastError == nil, let snapshot = refresher.snapshot {
+        if refresher.lastError == nil, let snapshot = refresher.snapshot, ShownProviders.shared.contains(.claude) {
             UsageAlerts.check(.claude, snapshot: snapshot, samples: nil)
         }
         schedulePublish()
     }
 
     func readCodex(force: Bool = false) async {
+        // Codex's logs are walked only while AI Models lists Codex.
+        guard ShownProviders.shared.contains(.codex) else {
+            schedulePublish()
+            return
+        }
         let codex = CodexLimits.shared
         await codex.refresh(force: force)
         // Every tick, new logs or not: the reset reminder is due by the clock, most often while
@@ -149,13 +167,6 @@ final class UsageFeed {
         let key = Self.settingsKey()
         guard key != shownSettings else { return }
         shownSettings = key
-        schedulePublish()
-    }
-
-    /// Claude's history changed apart from a reading, as after an import: the large widget's
-    /// curve is drawn again from it.
-    func claudeHistoryChanged() {
-        claudeTrend = (nil, nil)
         schedulePublish()
     }
 
@@ -183,10 +194,20 @@ final class UsageFeed {
 
     // MARK: The feed
 
+    /// Only the shown providers' plans, so the widgets offer only those.
     private func makeFeed(now: Date) async -> WidgetFeed {
-        let refresher = UsageRefresher.shared
-        let codex = CodexLimits.shared
+        var plans: [UsageProvider: WidgetFeed.Plan] = [:]
+        for provider in ShownProviders.shared.providers {
+            switch provider {
+            case .claude: plans[provider] = await claudePlan(now: now)
+            case .codex: plans[provider] = codexPlan(now: now)
+            }
+        }
+        return WidgetFeed(written: now, showLeft: ClaudeUsageStore.showLeft, metrics: MenuBarSettings.metrics, plans: plans)
+    }
 
+    private func claudePlan(now: Date) async -> WidgetFeed.Plan {
+        let refresher = UsageRefresher.shared
         var claude = WidgetFeed.Plan()
         claude.snapshot = refresher.reading
         claude.name = refresher.profile?.plan
@@ -203,7 +224,11 @@ final class UsageFeed {
             }
             claude.trend = claudeTrend.trend
         }
+        return claude
+    }
 
+    private func codexPlan(now: Date) -> WidgetFeed.Plan {
+        let codex = CodexLimits.shared
         var codexPlan = WidgetFeed.Plan()
         codexPlan.snapshot = codex.reading
         codexPlan.name = codex.plan.map { "ChatGPT \($0)" }
@@ -217,12 +242,7 @@ final class UsageFeed {
             }
             codexPlan.trend = codexTrend.trend
         }
-
-        return WidgetFeed(written: now,
-                          showLeft: ClaudeUsageStore.showLeft,
-                          metrics: MenuBarSettings.metrics,
-                          claude: claude,
-                          codex: codexPlan)
+        return codexPlan
     }
 
     /// Why there's no Claude reading, as the widget says it.
