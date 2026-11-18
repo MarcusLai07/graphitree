@@ -60,6 +60,8 @@ enum ProcessRunner {
 
 struct PlaybookError: LocalizedError {
     let message: String
+    /// Set when a backup stopped because GitHub has a playbook this Mac hasn't seen: that copy.
+    var remoteCopy: Playbook? = nil
     var errorDescription: String? { message }
 }
 
@@ -189,15 +191,91 @@ enum PlaybookResearch {
 
 // MARK: - GitHub backup
 
+/// Where one graph's playbook is backed up. Each graph has its own playbook, so each has its own
+/// repo; one repo shared by two graphs would have each backup replace the other's.
+struct PlaybookBackupSettings: Codable, Equatable, Sendable {
+    var github = false
+    var account = ""
+    /// The repo name to create. Empty means the default for the graph.
+    var repoName = ""
+    var remote = ""
+    var lastBackup: Date?
+    /// Why the last backup didn't go through, such as GitHub having changes from another Mac.
+    var problem: String?
+}
+
+enum PlaybookBackupStore {
+    private static func key(_ outDirectory: URL) -> String { "playbookBackup:" + outDirectory.standardizedFileURL.path }
+    static let legacyClaimedKey = "playbookBackupLegacyClaimed"
+
+    /// This graph's settings. Versions before per-graph settings kept one set for every graph:
+    /// the first graph to ask takes it over, and the check before each push catches a wrong guess.
+    static func load(for outDirectory: URL, defaults: UserDefaults = .standard) -> PlaybookBackupSettings {
+        if let data = defaults.data(forKey: key(outDirectory)),
+           let settings = try? JSONDecoder().decode(PlaybookBackupSettings.self, from: data) {
+            return settings
+        }
+        guard !defaults.bool(forKey: legacyClaimedKey) else { return PlaybookBackupSettings() }
+        let remote = defaults.string(forKey: "playbookRemote") ?? ""
+        let github = defaults.string(forKey: "playbookStorage") == "github"
+        guard github || !remote.isEmpty else { return PlaybookBackupSettings() }
+        let last = defaults.double(forKey: "playbookLastBackup")
+        let settings = PlaybookBackupSettings(
+            github: github, account: defaults.string(forKey: "playbookAccount") ?? "",
+            repoName: defaults.string(forKey: "playbookRepoName") ?? "", remote: remote,
+            lastBackup: last > 0 ? Date(timeIntervalSince1970: last) : nil
+        )
+        save(settings, for: outDirectory, defaults: defaults)
+        defaults.set(true, forKey: legacyClaimedKey)
+        return settings
+    }
+
+    static func save(_ settings: PlaybookBackupSettings, for outDirectory: URL, defaults: UserDefaults = .standard) {
+        if let data = try? JSONEncoder().encode(settings) { defaults.set(data, forKey: key(outDirectory)) }
+    }
+
+    static func update(for outDirectory: URL, defaults: UserDefaults = .standard, _ change: (inout PlaybookBackupSettings) -> Void) {
+        var settings = load(for: outDirectory, defaults: defaults)
+        change(&settings)
+        save(settings, for: outDirectory, defaults: defaults)
+    }
+}
+
 /// A copy of the playbook in its own git repo, pushed to a private GitHub repo. It's separate
 /// from graphify-out, which has its own history and holds the large graph.
 enum PlaybookBackup {
     static let files = [PlaybookFile.jsonName, PlaybookFile.markdownName]
 
-    static var mirror: URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("Graphitree/Playbook Backup", isDirectory: true)
+    /// The repo name a graph starts with: the machine-wide graph's plain, a single repo's named after it.
+    static func defaultRepoName(singleRepo: String?) -> String {
+        guard let singleRepo else { return "graphitree-playbook" }
+        let name = singleRepo.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? String($0) : "-" }.joined()
+        return "graphitree-playbook-" + name
     }
+
+    /// The local git copy for one remote. Older versions kept one copy for whichever repo they
+    /// pushed to; it moves here when it's the copy of this remote.
+    static func mirror(for remote: String, support: URL = applicationSupport) -> URL {
+        let fileManager = FileManager.default
+        let folder = mirrorFolder(for: remote, support: support)
+        let legacy = support.appendingPathComponent("Graphitree/Playbook Backup", isDirectory: true)
+        if !fileManager.fileExists(atPath: folder.path),
+           fileManager.fileExists(atPath: legacy.appendingPathComponent(".git").path),
+           let origin = try? ProcessRunner.run(git(), ["remote", "get-url", "origin"], in: legacy, timeout: 20),
+           origin.output.trimmingCharacters(in: .whitespacesAndNewlines) == remote {
+            try? fileManager.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fileManager.moveItem(at: legacy, to: folder)
+        }
+        return folder
+    }
+
+    /// Where the copy for a remote lives, without moving anything.
+    static func mirrorFolder(for remote: String, support: URL = applicationSupport) -> URL {
+        let name = remote.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined()
+        return support.appendingPathComponent("Graphitree/Playbook Backups/\(name)", isDirectory: true)
+    }
+
+    static var applicationSupport: URL { FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0] }
 
     static func gh() -> String? {
         ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", FileManager.default.homeDirectoryForCurrentUser.path + "/.local/bin/gh"]
@@ -242,12 +320,28 @@ enum PlaybookBackup {
     /// `remote` is an HTTPS GitHub URL, or a local path (used by the checks).
     /// Returns false when there was nothing new to back up.
     /// `identity` signs the commit; without one, git's own identity is used.
+    /// When the remote has a playbook this Mac hasn't seen, from another Mac or another graph, it
+    /// stops with that copy in the error, unless `replacing` says to back up over it.
     @discardableResult
-    static func backUp(from directory: URL, to mirror: URL = mirror, remote: String, account: String?, identity: GitIdentity? = nil, now: Date = .now) throws -> Bool {
+    static func backUp(from directory: URL, to mirror: URL? = nil, remote: String, account: String?, identity: GitIdentity? = nil, replacing: Bool = false, now: Date = .now) throws -> Bool {
+        if PlaybookFile.isUnreadable(in: directory) {
+            throw PlaybookError(message: "\(PlaybookFile.jsonName) can't be read, so nothing was backed up. The copy on GitHub is unchanged.")
+        }
+        let mine = PlaybookFile.load(from: directory)
+        let mirror = mirror ?? Self.mirror(for: remote)
+        let existed = FileManager.default.fileExists(atPath: mirror.appendingPathComponent(".git").path)
         let git = try GitMirror(directory: mirror, remote: remote, login: account)
         try git.prepare()
-        // Takes in anything pushed from another Mac first, and never overwrites it.
+        let synced = syncedCommit(in: mirror, existed: existed, git: git)
+        // Takes in anything pushed from another Mac first. History is never rewritten.
         try git.catchUp()
+        if !replacing, let theirs = try unseenCopy(git: git, synced: synced), !sameContent(theirs, mine) {
+            throw PlaybookError(message: "The repo has a playbook this Mac hasn't seen: \(summary(of: theirs)). Nothing was pushed.", remoteCopy: theirs)
+        }
+        // An empty playbook would replace the copy on GitHub with nothing.
+        guard !mine.isEmpty else {
+            throw PlaybookError(message: "The playbook is empty, so nothing was backed up. The copy on GitHub is unchanged.")
+        }
         var contents: [String: Data] = [:]
         for name in files {
             if let data = try? Data(contentsOf: directory.appendingPathComponent(name)) { contents[name] = data }
@@ -257,6 +351,95 @@ enum PlaybookBackup {
         let stamp = ISO8601DateFormatter.string(from: now, timeZone: .current, formatOptions: [.withFullDate, .withTime, .withColonSeparatorInTime])
         let commit = try git.commit(message: "Playbook backup \(stamp)", identity: identity)
         if try git.unpushed() > 0 { try git.push() }
+        if let head = git.commitID("HEAD") { markSynced(head, in: mirror) }
         return commit != nil
+    }
+
+    /// The remote's latest playbook and the commit it's from, with the mirror moved to match.
+    /// The caller saves it as this Mac's playbook, then calls `markSynced`.
+    static func takeRemoteCopy(remote: String, account: String?, mirror: URL? = nil) throws -> (playbook: Playbook, commit: String) {
+        let mirror = mirror ?? Self.mirror(for: remote)
+        let existed = FileManager.default.fileExists(atPath: mirror.appendingPathComponent(".git").path)
+        let git = try GitMirror(directory: mirror, remote: remote, login: account)
+        try git.prepare()
+        _ = syncedCommit(in: mirror, existed: existed, git: git)
+        let fetch = try git.git(["fetch", "--quiet", "origin"], timeout: 600, allowFailure: true)
+        guard fetch.status == 0 else {
+            throw PlaybookError(message: "Couldn't fetch \(remote): \((fetch.errors + fetch.output).trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+        guard let head = git.commitID("refs/remotes/origin/main"), let theirs = playbook(at: "refs/remotes/origin/main", git: git), !theirs.isEmpty else {
+            throw PlaybookError(message: "The repo has no playbook in it yet.")
+        }
+        try git.git(["checkout", "--quiet", "--force", "-B", "main", "refs/remotes/origin/main"])
+        return (theirs, head)
+    }
+
+    /// Records the commit this Mac's playbook now matches, so a later push knows what it has seen.
+    static func markSynced(_ commit: String, in mirror: URL) {
+        try? commit.write(to: syncedURL(in: mirror), atomically: true, encoding: .utf8)
+    }
+
+    /// "12 libraries, 4 stack answers, saved 3 days ago": enough to tell two playbooks apart.
+    static func summary(of playbook: Playbook, now: Date = .now) -> String {
+        let answered = playbook.stack.values.filter { !$0.isEmpty }.count
+        var parts = ["\(playbook.libraries.count) librar\(playbook.libraries.count == 1 ? "y" : "ies")", "\(answered) stack answer\(answered == 1 ? "" : "s")"]
+        if let saved = playbook.updatedAt {
+            let formatter = RelativeDateTimeFormatter()
+            formatter.unitsStyle = .full
+            parts.append("saved \(formatter.localizedString(for: saved, relativeTo: now))")
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    // MARK: What this Mac has seen
+
+    private static func syncedURL(in mirror: URL) -> URL { mirror.appendingPathComponent(".git/graphitree-synced") }
+
+    /// The commit this Mac last pushed or took in, or nil when it never has. A mirror from before
+    /// this was recorded counts its own last commit, which is what that version had pushed.
+    private static func syncedCommit(in mirror: URL, existed: Bool, git: GitMirror) -> String? {
+        if let text = try? String(contentsOf: syncedURL(in: mirror), encoding: .utf8) {
+            let commit = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return commit.isEmpty ? nil : commit
+        }
+        let commit = existed ? git.commitID("HEAD") : nil
+        // Written now, so a stop below still stops next time.
+        markSynced(commit ?? "", in: mirror)
+        return commit
+    }
+
+    /// The remote's playbook when it has commits this Mac hasn't seen and a playbook worth keeping.
+    private static func unseenCopy(git: GitMirror, synced: String?) throws -> Playbook? {
+        guard let head = git.commitID("refs/remotes/origin/main") else { return nil }
+        if let synced, head == synced || git.isAncestor(head, of: synced) { return nil }
+        guard let theirs = playbook(at: "refs/remotes/origin/main", git: git), !theirs.isEmpty else { return nil }
+        return theirs
+    }
+
+    private static func playbook(at revision: String, git: GitMirror) -> Playbook? {
+        guard let shown = try? git.git(["show", "\(revision):\(PlaybookFile.jsonName)"], allowFailure: true), shown.status == 0 else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(Playbook.self, from: Data(shown.output.utf8))
+    }
+
+    /// The same playbook, whenever it was saved.
+    private static func sameContent(_ a: Playbook, _ b: Playbook) -> Bool {
+        var a = a, b = b
+        a.updatedAt = nil
+        b.updatedAt = nil
+        return a == b
+    }
+}
+
+extension GitMirror {
+    func commitID(_ revision: String) -> String? {
+        guard let result = try? git(["rev-parse", "--verify", "--quiet", revision + "^{commit}"], allowFailure: true), result.status == 0 else { return nil }
+        let id = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return id.isEmpty ? nil : id
+    }
+
+    func isAncestor(_ ancestor: String, of descendant: String) -> Bool {
+        (try? git(["merge-base", "--is-ancestor", ancestor, descendant], allowFailure: true))?.status == 0
     }
 }

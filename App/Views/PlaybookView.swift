@@ -11,6 +11,9 @@ struct PlaybookView: View {
     let openModels: () -> Void
 
     @State private var playbook = Playbook()
+    /// The graph folder the playbook came from. Saves go back there, even when the panel closes
+    /// because the person switched to another graph.
+    @State private var loadedFrom: URL?
     @State private var isLoaded = false
     @State private var tab: PlaybookTab = .chat
     @State private var message: String?
@@ -27,16 +30,15 @@ struct PlaybookView: View {
     @State private var scan: StackScanResult?
     @State private var isScanning = false
 
-    // Storage
-    @AppStorage("playbookStorage") private var storage = "local"
-    @AppStorage("playbookAccount") private var account = ""
-    @AppStorage("playbookRepoName") private var repoName = "graphitree-playbook"
-    @AppStorage("playbookRemote") private var remote = ""
-    @AppStorage("playbookLastBackup") private var lastBackup = 0.0
+    // Storage: this graph's own backup, since each graph has its own playbook.
+    @State private var backup = PlaybookBackupSettings()
     @State private var accounts: [String] = []
     @State private var hasCheckedAccounts = false
     @State private var isConfirmingCreate = false
+    @State private var isConfirmingRestore = false
     @State private var isBackingUp = false
+    /// The repo's playbook, when a backup stopped because the repo has changes this Mac hasn't seen.
+    @State private var conflict: (remote: String, theirs: Playbook)?
     @State private var addsToGraph = true
     /// Which folder's stack the Stack tab edits. Empty means everywhere.
     @State private var stackScope = ""
@@ -84,6 +86,9 @@ struct PlaybookView: View {
         }
         .task { await load() }
         .onDisappear { finishEditing() }
+        .onChange(of: backup) {
+            if isLoaded, let loadedFrom { PlaybookBackupStore.save(backup, for: loadedFrom) }
+        }
     }
 
     /// A change the chat suggested, applied the same way as an edit made by hand.
@@ -102,16 +107,32 @@ struct PlaybookView: View {
             tile("Libraries", symbol: "books.vertical.fill", value: "\(playbook.libraries.count)", detail: playbook.libraries.isEmpty ? "None yet" : "\(verified) verified") { tab = .libraries }
             tile("Stack", symbol: "square.stack.3d.up.fill", value: "\(answered)/\(PlaybookQuestions.stack.count)", detail: "answered") { tab = .stack }
             tile("How you work", symbol: "person.text.rectangle.fill", value: "\(habits)/\(PlaybookQuestions.habits.count)", detail: "filled in") { tab = .habits }
-            tile("Stored", symbol: storage == "github" ? "lock.icloud.fill" : "internaldrive.fill", value: storage == "github" ? "GitHub" : "This Mac", detail: backupDetail) { tab = .storage }
+            tile("Stored", symbol: backup.github ? "lock.icloud.fill" : "internaldrive.fill", value: backup.github ? "GitHub" : "This Mac", detail: backupDetail) { tab = .storage }
         }
     }
 
     private var backupDetail: String {
-        guard storage == "github" else { return "Only here" }
-        guard lastBackup > 0 else { return "Not backed up yet" }
+        guard backup.github else { return "Only here" }
+        if backup.problem != nil, !backup.remote.isEmpty { return "Backup needs a look" }
+        guard let last = backup.lastBackup else { return "Not backed up yet" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
-        return "Backed up \(formatter.localizedString(for: Date(timeIntervalSince1970: lastBackup), relativeTo: .now))"
+        return "Backed up \(formatter.localizedString(for: last, relativeTo: .now))"
+    }
+
+    /// The repo name to create, the graph's default until the person types one.
+    private var repoName: Binding<String> {
+        Binding(
+            get: {
+                guard backup.repoName.isEmpty else { return backup.repoName }
+                return PlaybookBackup.defaultRepoName(singleRepo: GraphSource(outDirectory: loadedFrom ?? model.outDirectory).scheme.singleRepoName)
+            },
+            set: { backup.repoName = $0 }
+        )
+    }
+
+    private static func place(_ remote: String) -> String {
+        remote.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: ".git", with: "")
     }
 
     private func tile(_ title: String, symbol: String, value: String, detail: String, action: @escaping () -> Void) -> some View {
@@ -559,13 +580,13 @@ struct PlaybookView: View {
         VStack(alignment: .leading, spacing: 10) {
             graphCard
             Text("Backup").font(.headline).padding(.top, 6)
-            choice(isOn: storage == "local", title: "Only on this Mac", detail: "PLAYBOOK.md and playbook.json stay next to the guide in \(AgentGuide.abbreviate(model.playbookDirectory.path)).") {
-                storage = "local"
+            choice(isOn: !backup.github, title: "Only on this Mac", detail: "PLAYBOOK.md and playbook.json stay next to the guide in \(AgentGuide.abbreviate(model.playbookDirectory.path)).") {
+                backup.github = false
             }
-            choice(isOn: storage == "github", title: "Also back up to a private GitHub repo", detail: "Graphitree pushes a copy of the two playbook files to a private repo of yours. The graph itself never leaves this Mac.") {
-                storage = "github"
+            choice(isOn: backup.github, title: "Also back up to a private GitHub repo", detail: "Graphitree pushes a copy of the two playbook files to a private repo of yours. The graph itself never leaves this Mac. Each graph has its own playbook, so each backs up to its own repo.") {
+                backup.github = true
             }
-            if storage == "github" { githubCard }
+            if backup.github { githubCard }
             HStack {
                 Button("Show Files in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([model.playbookDirectory.appendingPathComponent(PlaybookFile.markdownName)])
@@ -624,62 +645,133 @@ struct PlaybookView: View {
             } else {
                 HStack(spacing: 10) {
                     Text("Account").font(.callout).frame(width: 80, alignment: .leading)
-                    Picker("Account", selection: $account) {
+                    Picker("Account", selection: $backup.account) {
                         ForEach(accounts, id: \.self) { Text($0).tag($0) }
                     }
                     .labelsHidden()
                     .fixedSize()
-                    .disabled(!remote.isEmpty)
+                    .disabled(!backup.remote.isEmpty)
                 }
-                if remote.isEmpty {
+                if let conflict {
+                    conflictCard(conflict)
+                } else if backup.remote.isEmpty {
+                    let name = repoName.wrappedValue.trimmingCharacters(in: .whitespaces)
                     HStack(spacing: 10) {
                         Text("Repo name").font(.callout).frame(width: 80, alignment: .leading)
-                        TextField("graphitree-playbook", text: $repoName).textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                        TextField("graphitree-playbook", text: repoName).textFieldStyle(.roundedBorder).frame(maxWidth: 260)
                     }
                     if isConfirmingCreate {
-                        Text("Creates github.com/\(account)/\(repoName) as a private repo, then pushes PLAYBOOK.md and playbook.json. If the repo already exists, Graphitree pushes to it instead.")
+                        // An empty playbook can only be filled from a repo, such as on a new Mac.
+                        Text(playbook.isEmpty
+                             ? "Brings the playbook in github.com/\(backup.account)/\(name) here, such as on a new Mac or after a reinstall. To start a new repo instead, add something to the playbook first."
+                             : "Creates github.com/\(backup.account)/\(name) as a private repo, then pushes PLAYBOOK.md and playbook.json. If it already holds a different playbook, from another Mac or another graph, Graphitree asks which to keep.")
                             .font(.callout)
                             .fixedSize(horizontal: false, vertical: true)
                         HStack {
                             Spacer()
                             Button("Cancel") { isConfirmingCreate = false }.buttonStyle(SoftButtonStyle())
-                            Button("Create and Back Up") { Task { await backUp(create: true) } }.buttonStyle(GoldButtonStyle())
+                            Button(playbook.isEmpty ? "Bring It Here" : "Create and Back Up") { Task { await backUp(create: true) } }.buttonStyle(GoldButtonStyle())
                         }
                     } else {
                         HStack {
                             Spacer()
-                            Button("Create Private Repo…") { isConfirmingCreate = true }
+                            if isBackingUp { ProgressView().controlSize(.small) }
+                            Button(playbook.isEmpty ? "Restore From a Repo…" : "Create Private Repo…") { isConfirmingCreate = true }
                                 .buttonStyle(GoldButtonStyle())
-                                .disabled(account.isEmpty || repoName.trimmingCharacters(in: .whitespaces).isEmpty || playbook.isEmpty)
-                                .help(playbook.isEmpty ? "Add something to the playbook first" : "")
+                                .disabled(backup.account.isEmpty || name.isEmpty || isBackingUp)
                         }
                     }
                 } else {
                     HStack(spacing: 8) {
                         Image(systemName: "lock.fill").foregroundStyle(Palette.jade)
-                        Text(remote.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: ".git", with: "")).font(.callout.monospaced())
+                        Text(Self.place(backup.remote)).font(.callout.monospaced())
                         Spacer()
                         if isBackingUp {
                             ProgressView().controlSize(.small)
                         } else {
-                            Button("Back Up Now") { Task { await backUp(create: false) } }.buttonStyle(GoldButtonStyle())
+                            Button("Back Up Now") { Task { await backUp(create: false) } }
+                                .buttonStyle(GoldButtonStyle())
+                                .disabled(playbook.isEmpty)
+                                .help(playbook.isEmpty ? "Add something to the playbook first" : "")
                         }
-                        if let url = URL(string: remote.replacingOccurrences(of: ".git", with: "")) {
+                        if let url = URL(string: backup.remote.replacingOccurrences(of: ".git", with: "")) {
                             Link("Open", destination: url).font(.callout)
                         }
+                    }
+                    if let problem = backup.problem {
+                        Text(problem).font(.caption).foregroundStyle(Palette.gold).fixedSize(horizontal: false, vertical: true)
                     }
                     Text("\(backupDetail). Graphitree also backs up when you close this panel after a change.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Button("Stop Using This Repo") { remote = ""; isConfirmingCreate = false }
-                        .buttonStyle(.link)
-                        .help("Forgets the repo here. It stays on GitHub.")
+                    if isConfirmingRestore {
+                        Text("Replaces this graph's playbook with the one in \(Self.place(backup.remote)). This Mac's playbook is kept beside it as playbook.replaced-….json.")
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack {
+                            Spacer()
+                            Button("Cancel") { isConfirmingRestore = false }.buttonStyle(SoftButtonStyle())
+                            Button("Restore") { Task { await restore(from: backup.remote) } }.buttonStyle(GoldButtonStyle())
+                        }
+                    } else {
+                        HStack(spacing: 16) {
+                            Button("Restore From GitHub…") { isConfirmingRestore = true }
+                                .buttonStyle(.link)
+                                .disabled(isBackingUp)
+                                .help("Brings the repo's playbook here, such as after a change on another Mac")
+                            Button("Stop Using This Repo") {
+                                backup.remote = ""
+                                backup.problem = nil
+                                isConfirmingCreate = false
+                            }
+                            .buttonStyle(.link)
+                            .help("Forgets the repo here. It stays on GitHub.")
+                        }
+                    }
                 }
             }
         }
         .modifier(RowCard())
         .task { if !hasCheckedAccounts { await loadAccounts() } }
-        .onChange(of: accounts) { if account.isEmpty || !accounts.contains(account) { account = accounts.first ?? "" } }
+        .onChange(of: accounts) {
+            // A repo already in use keeps the account that pushes to it.
+            if backup.remote.isEmpty, backup.account.isEmpty || !accounts.contains(backup.account) { backup.account = accounts.first ?? "" }
+        }
+    }
+
+    /// A backup stopped because the repo has a playbook this Mac hasn't seen: pick which to keep.
+    private func conflictCard(_ conflict: (remote: String, theirs: Playbook)) -> some View {
+        let mine = loadedFrom.map { PlaybookFile.load(from: $0) } ?? playbook
+        return VStack(alignment: .leading, spacing: 8) {
+            Label("\(Self.place(conflict.remote)) has a playbook this Mac hasn't seen", systemImage: "exclamationmark.triangle.fill")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(Palette.gold)
+            Text("In the repo: \(PlaybookBackup.summary(of: conflict.theirs)). On this Mac: \(PlaybookBackup.summary(of: mine)). It may be from another Mac or another graph. Nothing was pushed.")
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Use the repo's copy to bring it here; this Mac's is kept beside it as playbook.replaced-….json. Or replace the repo's copy with this Mac's; the repo's history keeps the old one.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                if isBackingUp {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button("Cancel") {
+                        self.conflict = nil
+                        if backup.remote.isEmpty { backup.problem = nil }
+                    }
+                    .buttonStyle(SoftButtonStyle())
+                    Button("Replace the Repo's Copy") { Task { await backUp(create: false, replacing: true, to: conflict.remote) } }
+                        .buttonStyle(SoftButtonStyle())
+                    Button("Use the Repo's Copy") { Task { await restore(from: conflict.remote) } }
+                        .buttonStyle(GoldButtonStyle())
+                }
+            }
+        }
+        .padding(10)
+        .background(Palette.gold.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private func choice(isOn: Bool, title: String, detail: String, action: @escaping () -> Void) -> some View {
@@ -703,7 +795,13 @@ struct PlaybookView: View {
     // MARK: - Changes
 
     private func load() async {
-        playbook = model.loadPlaybook()
+        let directory = model.playbookDirectory
+        loadedFrom = directory
+        playbook = PlaybookFile.load(from: directory)
+        backup = PlaybookBackupStore.load(for: directory)
+        if PlaybookFile.isUnreadable(in: directory) {
+            message = "Graphitree couldn't read \(PlaybookFile.jsonName), so the Playbook starts empty. The file is left as it is. Before anything new is saved, it's kept beside it as playbook.unreadable-….json."
+        }
         // Folders that can have their own stack: the labelled ones in the graph, or the groups.
         let source = GraphSource(outDirectory: model.outDirectory)
         if source.scheme.singleRepoName == nil {
@@ -735,11 +833,13 @@ struct PlaybookView: View {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
             save()
+            saveTask = nil
         }
     }
 
     private func save() {
-        if let error = model.savePlaybook(playbook) { message = "Couldn't save the playbook: \(error)" }
+        guard let loadedFrom else { return }
+        if let error = model.savePlaybook(playbook, in: loadedFrom) { message = "Couldn't save the playbook: \(error)" }
     }
 
     private func update(_ id: UUID, _ change: (inout PlaybookLibrary) -> Void) {
@@ -820,22 +920,64 @@ struct PlaybookView: View {
         message = filled == 0 ? "Every question with scan results already has an answer." : "Filled \(filled) question\(filled == 1 ? "" : "s") from what your projects use. Change anything that isn't your default for new work."
     }
 
-    private func backUp(create: Bool) async {
+    /// Backs up to the repo in use, a new one (`create`), or `target`. `replacing` backs up over a
+    /// repo copy this Mac hasn't seen, after the person chose to.
+    private func backUp(create: Bool, replacing: Bool = false, to target: String? = nil) async {
         saveTask?.cancel()
+        saveTask = nil
         save()
         isBackingUp = true
         isConfirmingCreate = false
-        let result = await model.backUpPlaybook(remote: create ? nil : remote, createNamed: create ? repoName.trimmingCharacters(in: .whitespaces) : nil, account: account)
+        let name = repoName.wrappedValue.trimmingCharacters(in: .whitespaces)
+        let account = backup.account
+        let remote = target ?? (create ? "https://github.com/\(account)/\(name).git" : backup.remote)
+        let result = await model.backUpPlaybook(remote: create && target == nil ? nil : remote, createNamed: create && target == nil ? name : nil, account: account, from: loadedFrom, replacing: replacing)
         isBackingUp = false
+        reloadBackup()
         switch result {
         case .success(let url):
-            remote = url
-            lastBackup = Date.now.timeIntervalSince1970
+            conflict = nil
             isDirty = false
-            message = "Backed up to \(url.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: ".git", with: ""))."
+            message = "Backed up to \(Self.place(url))."
         case .failure(let error):
-            message = "Backup failed: \(error.message)"
+            if let theirs = error.remoteCopy {
+                if playbook.isEmpty {
+                    // Nothing here to lose: bring the repo's playbook in.
+                    await restore(from: remote)
+                } else {
+                    conflict = (remote, theirs)
+                    message = nil
+                }
+            } else {
+                message = "Backup failed: \(error.message)"
+            }
         }
+    }
+
+    /// Replaces this graph's playbook with the repo's, keeping this Mac's beside it.
+    private func restore(from remote: String) async {
+        saveTask?.cancel()
+        saveTask = nil
+        save()
+        isBackingUp = true
+        isConfirmingRestore = false
+        let result = await model.restorePlaybook(remote: remote, account: backup.account, into: loadedFrom)
+        isBackingUp = false
+        reloadBackup()
+        switch result {
+        case .success(let restored):
+            playbook = restored
+            conflict = nil
+            isDirty = false
+            message = "Brought the playbook from \(Self.place(remote)) here: \(PlaybookBackup.summary(of: restored))."
+        case .failure(let error):
+            message = "Couldn't bring the playbook here: \(error.message)"
+        }
+    }
+
+    /// The model records each backup's outcome in the graph's settings; show what it wrote.
+    private func reloadBackup() {
+        if let loadedFrom { backup = PlaybookBackupStore.load(for: loadedFrom) }
     }
 
     /// Saves what's pending and, when backing up to GitHub, pushes the change.
@@ -845,15 +987,12 @@ struct PlaybookView: View {
             saveTask?.cancel()
             save()
         }
-        if isDirty, storage == "github", !remote.isEmpty, !account.isEmpty {
+        if isDirty, backup.github, !backup.remote.isEmpty, !backup.account.isEmpty, !playbook.isEmpty, let loadedFrom {
             let model = model
-            let remote = remote
-            let account = account
-            Task {
-                if case .success = await model.backUpPlaybook(remote: remote, createNamed: nil, account: account) {
-                    UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: "playbookLastBackup")
-                }
-            }
+            let remote = backup.remote
+            let account = backup.account
+            // The outcome, a stop included, lands in the graph's backup settings for next time.
+            Task { _ = await model.backUpPlaybook(remote: remote, createNamed: nil, account: account, from: loadedFrom) }
         }
     }
 }

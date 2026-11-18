@@ -336,7 +336,7 @@ enum SessionDigest {
         var used = 0
         var seen = Set<String>()
         for message in scan.messages {
-            let text = message.text.replacingOccurrences(of: "\n", with: " ")
+            let text = redacted(message.text.replacingOccurrences(of: "\n", with: " "))
             guard text.count >= 12, seen.insert(text.lowercased()).inserted else { continue }
             let line = "- [\(place(message.cwd))] \(text)"
             guard used + line.count <= maxCharacters else { break }
@@ -352,6 +352,30 @@ enum SessionDigest {
             digest += "\n\nPackages installed in those sessions (name: projects): " + ranked.map { "\($0.name): \($0.projects)" }.joined(separator: ", ")
         }
         return digest
+    }
+
+    /// Shapes of keys, tokens and passwords people paste into a session. The digest can go to a
+    /// different provider than the session did, so these never leave the Mac.
+    private static let secretPatterns: [(pattern: String, keep: String)] = [
+        (#"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(-----END [A-Z ]*PRIVATE KEY-----|$)"#, ""),
+        (#"\b(sk|rk|pk)-[A-Za-z0-9_-]{16,}"#, ""),
+        (#"\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})"#, ""),
+        (#"\b(AKIA|ASIA)[0-9A-Z]{16}\b"#, ""),
+        (#"\bxox[abprs]-[A-Za-z0-9-]{10,}"#, ""),
+        (#"\bAIza[0-9A-Za-z_-]{30,}"#, ""),
+        (#"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"#, ""),
+        (#"(?i)\b((?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)\s*[:=]\s*)\S+"#, "$1"),
+        // Any other long run of letters and digits, such as a token from a service not named above.
+        (#"\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}"#, ""),
+    ]
+
+    /// The text with anything that looks like a secret replaced by [redacted].
+    static func redacted(_ text: String) -> String {
+        var result = text
+        for (pattern, keep) in secretPatterns {
+            result = result.replacingOccurrences(of: pattern, with: keep + "[redacted]", options: .regularExpression)
+        }
+        return result
     }
 
     static let instructions = """

@@ -90,6 +90,72 @@ struct Playbook: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Reading playbook.json forgivingly
+
+// A field that's missing or the wrong type takes its default, and a library that can't be read is
+// skipped, so one bad spot doesn't lose the whole playbook. That covers a file from an older or
+// newer Graphitree, and one an AI tool or the person edited by hand.
+
+extension KeyedDecodingContainer {
+    fileprivate func value<T: Decodable>(_ key: Key, or fallback: T) -> T {
+        (try? decodeIfPresent(T.self, forKey: key)) ?? fallback
+    }
+}
+
+/// Reads any JSON value and keeps nothing, to step over a list item that can't be read.
+private struct SkippedValue: Decodable {
+    init(from decoder: Decoder) throws {}
+}
+
+extension PlaybookLibrary {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = values.value(.id, or: UUID())
+        name = values.value(.name, or: "")
+        url = values.value(.url, or: "")
+        task = values.value(.task, or: "")
+        purpose = values.value(.purpose, or: "")
+        useWhen = values.value(.useWhen, or: "")
+        avoidWhen = values.value(.avoidWhen, or: "")
+        install = values.value(.install, or: "")
+        platforms = values.value(.platforms, or: "")
+        health = values.value(.health, or: "")
+        verified = values.value(.verified, or: false)
+        drafted = values.value(.drafted, or: false)
+        notes = values.value(.notes, or: "")
+    }
+}
+
+extension StackAnswer {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        choices = values.value(.choices, or: [])
+        notes = values.value(.notes, or: "")
+    }
+}
+
+extension Playbook {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = values.value(.version, or: 1)
+        var libraries: [PlaybookLibrary] = []
+        if var list = try? values.nestedUnkeyedContainer(forKey: .libraries) {
+            while !list.isAtEnd {
+                if let library = try? list.decode(PlaybookLibrary.self) {
+                    libraries.append(library)
+                } else if (try? list.decode(SkippedValue.self)) == nil {
+                    break
+                }
+            }
+        }
+        self.libraries = libraries
+        stack = values.value(.stack, or: [:])
+        habits = values.value(.habits, or: [:])
+        updatedAt = values.value(.updatedAt, or: nil)
+        folderStacks = values.value(.folderStacks, or: nil)
+    }
+}
+
 // MARK: - Questions
 
 struct StackOption: Hashable, Sendable {
@@ -277,14 +343,42 @@ enum PlaybookFile {
     static let markdownName = "PLAYBOOK.md"
 
     static func load(from directory: URL) -> Playbook {
-        let url = directory.appendingPathComponent(jsonName)
-        guard let data = try? Data(contentsOf: url) else { return Playbook() }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode(Playbook.self, from: data)) ?? Playbook()
+        (try? read(from: directory)) ?? Playbook()
     }
 
-    /// Writes the JSON Graphitree reads back and the markdown AI tools read.
+    /// The playbook, an empty one when there's no file, or an error when the file can't be read.
+    private static func read(from directory: URL) throws -> Playbook {
+        let url = directory.appendingPathComponent(jsonName)
+        guard FileManager.default.fileExists(atPath: url.path) else { return Playbook() }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(Playbook.self, from: Data(contentsOf: url))
+    }
+
+    /// Whether playbook.json is there but can't be read, such as when a hand edit broke its JSON.
+    static func isUnreadable(in directory: URL) -> Bool {
+        (try? read(from: directory)) == nil
+    }
+
+    /// Copies playbook.json to playbook.<label>-<time>.json beside it, before it's replaced.
+    /// Returns the copy's name, or nil when there's no file to keep.
+    @discardableResult
+    static func keepAside(in directory: URL, as label: String, now: Date = .now) throws -> String? {
+        let json = directory.appendingPathComponent(jsonName)
+        guard FileManager.default.fileExists(atPath: json.path) else { return nil }
+        let stamp = ISO8601DateFormatter.string(from: now, timeZone: .current, formatOptions: [.withFullDate, .withTime])
+        var name = "playbook.\(label)-\(stamp).json"
+        var count = 1
+        while FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path) {
+            count += 1
+            name = "playbook.\(label)-\(stamp)-\(count).json"
+        }
+        try FileManager.default.copyItem(at: json, to: directory.appendingPathComponent(name))
+        return name
+    }
+
+    /// Writes the JSON Graphitree reads back and the markdown AI tools read. A playbook.json that
+    /// can't be read is kept as playbook.unreadable-<time>.json first, never written over.
     static func save(_ playbook: Playbook, to directory: URL, now: Date = .now) throws {
         var stamped = playbook
         stamped.updatedAt = now
@@ -292,7 +386,9 @@ enum PlaybookFile {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try encoder.encode(stamped).write(to: directory.appendingPathComponent(jsonName), options: .atomic)
+        let json = directory.appendingPathComponent(jsonName)
+        if isUnreadable(in: directory) { try keepAside(in: directory, as: "unreadable", now: now) }
+        try encoder.encode(stamped).write(to: json, options: .atomic)
         try markdown(stamped).write(to: directory.appendingPathComponent(markdownName), atomically: true, encoding: .utf8)
     }
 

@@ -618,15 +618,18 @@ final class AppModel {
     func loadPlaybook() -> Playbook { PlaybookFile.load(from: playbookDirectory) }
 
     /// Writes the playbook, its copy for the graph, and the guide, which carries its picks.
-    /// Returns an error message or nil.
-    func savePlaybook(_ playbook: Playbook) -> String? {
+    /// `directory` is the graph the playbook was loaded from: after a switch to another graph, an
+    /// edit still lands in its own. Returns an error message or nil.
+    func savePlaybook(_ playbook: Playbook, in directory: URL? = nil) -> String? {
+        let directory = directory ?? playbookDirectory
+        let root = GraphSource(outDirectory: directory).rootPath
         do {
-            try PlaybookFile.save(playbook, to: playbookDirectory)
-            if playbookAddsToGraph { try PlaybookFile.writeGraphCopy(playbook, root: graphRoot) }
+            try PlaybookFile.save(playbook, to: directory)
+            if PlaybookFile.addsToGraph(root: root) { try PlaybookFile.writeGraphCopy(playbook, root: root) }
         } catch {
             return error.localizedDescription
         }
-        refreshAgentGuideIfPresent()
+        if directory.standardizedFileURL == playbookDirectory.standardizedFileURL { refreshAgentGuideIfPresent() }
         return nil
     }
 
@@ -760,12 +763,23 @@ final class AppModel {
             } catch {
                 reply = ChatTurn(role: .assistant, text: process.wasStopped || Task.isCancelled ? "Stopped." : error.localizedDescription, isError: true)
             }
-            guard let self, self.outDirectory == directory else { return }
-            self.chatTurns.append(reply)
+            guard let self else { return }
             self.isChatting = false
             self.chatStartedAt = nil
             self.chatProcess = nil
-            ChatStore.save(self.chatTurns, for: directory)
+            self.addTurn(reply, toChatOf: directory)
+        }
+    }
+
+    /// Adds a turn to a graph's chat. When the person switched graphs while it was coming, it
+    /// goes into that graph's saved chat, not the one on screen.
+    private func addTurn(_ turn: ChatTurn, toChatOf directory: URL) {
+        if outDirectory == directory {
+            loadChatIfNeeded()
+            chatTurns.append(turn)
+            ChatStore.save(chatTurns, for: directory)
+        } else {
+            ChatStore.save(ChatStore.load(for: directory) + [turn], for: directory)
         }
     }
 
@@ -793,22 +807,63 @@ final class AppModel {
         }
     }
 
-    /// Creates the private repo when `create` is set, then backs up. Returns the remote URL.
-    func backUpPlaybook(remote: String?, createNamed name: String?, account: String) async -> Result<String, PlaybookError> {
-        let directory = playbookDirectory
-        return await withCheckedContinuation { continuation in
+    /// Creates the private repo when `create` is set, then backs up the playbook in `directory`
+    /// (the current graph's when nil). Returns the remote URL. When the repo has a playbook this
+    /// Mac hasn't seen, the error carries it, unless `replacing` says to back up over it. The
+    /// graph's backup settings record the outcome either way.
+    func backUpPlaybook(remote: String?, createNamed name: String?, account: String, from directory: URL? = nil, replacing: Bool = false) async -> Result<String, PlaybookError> {
+        let directory = directory ?? playbookDirectory
+        let result: Result<String, PlaybookError> = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
+                var url = remote ?? ""
+                // An empty playbook has nothing to push, so a repo is only any use when it
+                // already holds one to bring here: it's never created empty.
+                let isEmpty = PlaybookFile.load(from: directory).isEmpty && !PlaybookFile.isUnreadable(in: directory)
                 do {
-                    var url = remote ?? ""
                     if let name {
-                        do {
-                            url = try PlaybookBackup.createRepo(named: name, account: account)
-                        } catch let error as PlaybookError where error.message.contains("already exists") {
-                            url = "https://github.com/\(account)/\(name).git"
+                        url = "https://github.com/\(account)/\(name).git"
+                        if !isEmpty {
+                            do {
+                                url = try PlaybookBackup.createRepo(named: name, account: account)
+                            } catch let error as PlaybookError where error.message.contains("already exists") {}
                         }
                     }
-                    try PlaybookBackup.backUp(from: directory, remote: url, account: account)
+                    try PlaybookBackup.backUp(from: directory, remote: url, account: account, replacing: replacing)
                     continuation.resume(returning: .success(url))
+                } catch let error as PlaybookError {
+                    if name != nil, isEmpty, error.remoteCopy == nil {
+                        let place = url.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: ".git", with: "")
+                        continuation.resume(returning: .failure(PlaybookError(message: "\(place) has no playbook to bring here. Add something to the playbook first, then set up the repo.")))
+                    } else {
+                        continuation.resume(returning: .failure(error))
+                    }
+                } catch {
+                    continuation.resume(returning: .failure(PlaybookError(message: error.localizedDescription)))
+                }
+            }
+        }
+        PlaybookBackupStore.update(for: directory) { settings in
+            switch result {
+            case .success(let url):
+                settings.remote = url
+                settings.account = account
+                settings.lastBackup = .now
+                settings.problem = nil
+            case .failure(let error):
+                settings.problem = error.message
+            }
+        }
+        return result
+    }
+
+    /// Replaces the playbook in `directory` with the repo's latest, keeping this Mac's beside it
+    /// as playbook.replaced-<time>.json. Returns the playbook now in place.
+    func restorePlaybook(remote: String, account: String, into directory: URL? = nil) async -> Result<Playbook, PlaybookError> {
+        let directory = directory ?? playbookDirectory
+        let fetched: Result<(playbook: Playbook, commit: String), PlaybookError> = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    continuation.resume(returning: .success(try PlaybookBackup.takeRemoteCopy(remote: remote, account: account)))
                 } catch let error as PlaybookError {
                     continuation.resume(returning: .failure(error))
                 } catch {
@@ -816,6 +871,28 @@ final class AppModel {
                 }
             }
         }
+        let copy: (playbook: Playbook, commit: String)
+        switch fetched {
+        case .success(let found): copy = found
+        case .failure(let error): return .failure(error)
+        }
+        if !PlaybookFile.load(from: directory).isEmpty {
+            do {
+                try PlaybookFile.keepAside(in: directory, as: "replaced")
+            } catch {
+                return .failure(PlaybookError(message: "Couldn't keep this Mac's playbook aside, so nothing was replaced: \(error.localizedDescription)"))
+            }
+        }
+        if let error = savePlaybook(copy.playbook, in: directory) { return .failure(PlaybookError(message: error)) }
+        PlaybookBackup.markSynced(copy.commit, in: PlaybookBackup.mirror(for: remote))
+        PlaybookBackupStore.update(for: directory) { settings in
+            settings.github = true
+            settings.remote = remote
+            settings.account = account
+            settings.lastBackup = .now
+            settings.problem = nil
+        }
+        return .success(PlaybookFile.load(from: directory))
     }
 
     func projectSizes() async -> [ProjectSize] {
@@ -1613,21 +1690,20 @@ final class AppModel {
 
     /// Re-researches every library and puts what changed in the chat, for the person to apply.
     func checkLibraries() async {
+        let directory = outDirectory
         let libraries = loadPlaybook().libraries
         guard !libraries.isEmpty, !isCheckingLibraries else { return }
         isCheckingLibraries = true
-        loadChatIfNeeded()
         let result = await draftLibraries(libraries)
         isCheckingLibraries = false
         freshness.lastLibraryCheck = .now
         switch result {
         case .success(let drafts):
             let changes = PlaybookCheck.changes(for: libraries, drafts: drafts)
-            chatTurns.append(ChatTurn(role: .assistant, text: PlaybookCheck.summary(checked: drafts.count, changes: changes), changes: changes))
+            addTurn(ChatTurn(role: .assistant, text: PlaybookCheck.summary(checked: drafts.count, changes: changes), changes: changes), toChatOf: directory)
         case .failure(let error):
-            chatTurns.append(ChatTurn(role: .assistant, text: "The library check stopped: \(error.message)", isError: true))
+            addTurn(ChatTurn(role: .assistant, text: "The library check stopped: \(error.message)", isError: true), toChatOf: directory)
         }
-        ChatStore.save(chatTurns, for: outDirectory)
     }
 
     // MARK: - Keeping fresh

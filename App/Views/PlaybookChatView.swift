@@ -147,7 +147,7 @@ struct PlaybookChatView: View {
         let overhead: Int
         if case .success(let engine) = model.chatEngine(), case .claudeCode = engine.backend { overhead = 45_000 } else { overhead = 3_000 }
         let tokens = learning.digest.count / 4 + overhead
-        return "Sends \(learning.messages.formatted()) of your own messages from the last \(AppModel.insightDays) days to \(engineName): about \(BuildView.tokens(tokens)) tokens. Tool output and pasted files aren't included. It suggests notes and picks without private details, and nothing is saved until you apply them."
+        return "Sends \(learning.messages.formatted()) of your own messages from the last \(AppModel.insightDays) days to \(engineName): about \(BuildView.tokens(tokens)) tokens. Tool output and pasted files aren't included, and anything that looks like a key, token or password is taken out first. It suggests notes and picks without private details, and nothing is saved until you apply them."
     }
 
     // MARK: - Conversation

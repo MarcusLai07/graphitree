@@ -1088,6 +1088,27 @@ expectEqual(reloaded.libraries, book.libraries, "the playbook reloads its librar
 expectEqual(reloaded.stack, book.stack, "the playbook reloads its stack")
 expectEqual(reloaded.updatedAt, Date(timeIntervalSince1970: 1_800_000_000), "saving stamps the time")
 check(PlaybookFile.load(from: bookFolder.appendingPathComponent("none")).isEmpty, "no file means an empty playbook")
+check(!PlaybookFile.isUnreadable(in: bookFolder.appendingPathComponent("none")), "no file isn't an unreadable file")
+
+let looseFolder = FileManager.default.temporaryDirectory.appendingPathComponent("graphitree-playbook-loose-\(UUID().uuidString)")
+try FileManager.default.createDirectory(at: looseFolder, withIntermediateDirectories: true)
+try #"{"libraries":[{"name":"Sonner","task":"Toasts"},"not a library",{"name":"Vaul","verified":"yes","futureField":[1,2]}],"stack":{"web":{"choices":["Next.js"]}},"somethingNew":true}"#
+    .write(to: looseFolder.appendingPathComponent(PlaybookFile.jsonName), atomically: true, encoding: .utf8)
+let loose = PlaybookFile.load(from: looseFolder)
+expectEqual(loose.libraries.map(\.name), ["Sonner", "Vaul"], "missing and unknown fields, and an unreadable library, don't lose the rest")
+expectEqual(loose.libraries.first?.task, "Toasts", "fields that are there are read")
+check(loose.libraries.last?.verified == false, "a field of the wrong type takes its default")
+expectEqual(loose.stack["web"]?.choices, ["Next.js"], "a stack answer without notes is read")
+check(!PlaybookFile.isUnreadable(in: looseFolder), "a file with odd fields still counts as readable")
+let broken = "{\"libraries\": [ {\"name\": \"Sonner\" "
+try broken.write(to: looseFolder.appendingPathComponent(PlaybookFile.jsonName), atomically: true, encoding: .utf8)
+check(PlaybookFile.isUnreadable(in: looseFolder) && PlaybookFile.load(from: looseFolder).isEmpty, "broken JSON is unreadable and shows as empty")
+try PlaybookFile.save(Playbook(libraries: [PlaybookLibrary(name: "Vaul")]), to: looseFolder)
+let kept = (try FileManager.default.contentsOfDirectory(atPath: looseFolder.path)).filter { $0.hasPrefix("playbook.unreadable-") }
+expectEqual(kept.count, 1, "saving over an unreadable playbook keeps a copy of it first")
+expectEqual(kept.first.flatMap { try? String(contentsOf: looseFolder.appendingPathComponent($0), encoding: .utf8) }, broken, "the copy is the file as it was")
+expectEqual(PlaybookFile.load(from: looseFolder).libraries.map(\.name), ["Vaul"], "the new playbook is saved")
+try? FileManager.default.removeItem(at: looseFolder)
 
 let playbookInGraph = (sceneWorkspace.source.outDirectory.path as NSString).appendingPathComponent(PlaybookFile.markdownName)
 check(!guide.contains("Before you build something new"), "without a playbook, the guide doesn't mention one")
@@ -1180,7 +1201,92 @@ let pushed = try ProcessRunner.run("/usr/bin/git", ["--git-dir", bare.path, "log
 expectEqual(pushed.output.split(separator: "\n").count, 2, "the remote has one commit per change")
 let pushedFiles = try ProcessRunner.run("/usr/bin/git", ["--git-dir", bare.path, "ls-tree", "--name-only", "main"])
 expectEqual(Set(pushedFiles.output.split(separator: "\n").map(String.init)), ["PLAYBOOK.md", "playbook.json"], "only the playbook files are pushed")
-for folder in [bookFolder, bare, mirrorFolder] { try? FileManager.default.removeItem(at: folder) }
+let emptyBook = FileManager.default.temporaryDirectory.appendingPathComponent("graphitree-playbook-empty-\(UUID().uuidString)")
+check((try? PlaybookBackup.backUp(from: emptyBook, to: mirrorFolder, remote: bare.path, account: nil)) == nil, "a graph with no playbook isn't backed up")
+try PlaybookFile.save(Playbook(), to: emptyBook)
+check((try? PlaybookBackup.backUp(from: emptyBook, to: mirrorFolder, remote: bare.path, account: nil)) == nil, "an empty playbook isn't backed up")
+try "{ broken".write(to: emptyBook.appendingPathComponent(PlaybookFile.jsonName), atomically: true, encoding: .utf8)
+check((try? PlaybookBackup.backUp(from: emptyBook, to: mirrorFolder, remote: bare.path, account: nil)) == nil, "an unreadable playbook isn't backed up")
+expectEqual(try ProcessRunner.run("/usr/bin/git", ["--git-dir", bare.path, "log", "--oneline", "main"]).output.split(separator: "\n").count, 2, "the remote keeps its playbook")
+
+// A second Mac, or another graph, backing up to the same repo.
+func remoteCommits() -> Int {
+    ((try? ProcessRunner.run("/usr/bin/git", ["--git-dir", bare.path, "log", "--oneline", "main"]))?.output ?? "").split(separator: "\n").count
+}
+func backupStop(_ folder: URL, _ mirror: URL) -> PlaybookError? {
+    do { try PlaybookBackup.backUp(from: folder, to: mirror, remote: bare.path, account: nil); return nil } catch { return error as? PlaybookError }
+}
+let temporary = FileManager.default.temporaryDirectory
+let otherBook = temporary.appendingPathComponent("graphitree-playbook-other-\(UUID().uuidString)")
+let otherMirror = temporary.appendingPathComponent("graphitree-mirror-other-\(UUID().uuidString)")
+try PlaybookFile.save(Playbook(libraries: [PlaybookLibrary(name: "Vaul")]), to: otherBook)
+let otherStop = backupStop(otherBook, otherMirror)
+expectEqual(otherStop?.remoteCopy?.libraries.map(\.name).sorted(), book.libraries.map(\.name).sorted(), "a backup stops when the repo has a playbook this Mac hasn't seen, and carries that copy")
+expectEqual(remoteCommits(), 2, "nothing is pushed over it")
+check(backupStop(otherBook, otherMirror)?.remoteCopy != nil, "it stops again until the person chooses")
+let replaced = try PlaybookBackup.backUp(from: otherBook, to: otherMirror, remote: bare.path, account: nil, replacing: true)
+check(replaced, "replacing the repo's copy backs up over it")
+expectEqual(remoteCommits(), 3, "replacing adds a commit, so the repo's history keeps the old copy")
+book.habits["always"] = "Ask before adding a dependency."
+try PlaybookFile.save(book, to: bookFolder)
+expectEqual(backupStop(bookFolder, mirrorFolder)?.remoteCopy?.libraries.map(\.name), ["Vaul"], "the first Mac then stops too, rather than undo the other's backup")
+expectEqual(remoteCommits(), 3, "and pushes nothing")
+let taken = try PlaybookBackup.takeRemoteCopy(remote: bare.path, account: nil, mirror: mirrorFolder)
+expectEqual(taken.playbook.libraries.map(\.name), ["Vaul"], "taking the repo's copy reads its latest playbook")
+var restoredBook = taken.playbook
+try PlaybookFile.save(restoredBook, to: bookFolder)
+PlaybookBackup.markSynced(taken.commit, in: mirrorFolder)
+restoredBook.libraries.append(PlaybookLibrary(name: "cmdk"))
+try PlaybookFile.save(restoredBook, to: bookFolder)
+check(backupStop(bookFolder, mirrorFolder) == nil && remoteCommits() == 4, "after taking it, backups go through again")
+try FileManager.default.removeItem(at: mirrorFolder.appendingPathComponent(".git/graphitree-synced"))
+restoredBook.habits["always"] = "Explain changes plainly."
+try PlaybookFile.save(restoredBook, to: bookFolder)
+check(backupStop(bookFolder, mirrorFolder) == nil && remoteCommits() == 5, "a copy from before the record was kept counts its own last commit as seen")
+let sameBook = temporary.appendingPathComponent("graphitree-playbook-same-\(UUID().uuidString)")
+let sameMirror = temporary.appendingPathComponent("graphitree-mirror-same-\(UUID().uuidString)")
+try PlaybookFile.save(restoredBook, to: sameBook, now: Date(timeIntervalSince1970: 1_900_000_000))
+check(backupStop(sameBook, sameMirror) == nil, "a repo copy with the same playbook, saved at another time, isn't a conflict")
+let freshBook = temporary.appendingPathComponent("graphitree-playbook-fresh-\(UUID().uuidString)")
+let freshMirror = temporary.appendingPathComponent("graphitree-mirror-fresh-\(UUID().uuidString)")
+check(backupStop(freshBook, freshMirror)?.remoteCopy != nil, "an empty playbook facing a repo that has one stops with that copy, so it can be brought in")
+expectEqual(PlaybookBackup.summary(of: Playbook(libraries: [PlaybookLibrary(name: "a")], stack: ["web": StackAnswer(choices: ["Next.js"])])), "1 library, 1 stack answer", "a playbook's summary counts what's in it")
+for folder in [bookFolder, bare, mirrorFolder, emptyBook, otherBook, otherMirror, sameBook, sameMirror, freshBook, freshMirror] { try? FileManager.default.removeItem(at: folder) }
+
+// The one copy older versions kept moves to its repo's own folder, and only for that repo.
+let fakeSupport = temporary.appendingPathComponent("graphitree-support-\(UUID().uuidString)")
+let legacyMirror = fakeSupport.appendingPathComponent("Graphitree/Playbook Backup")
+try FileManager.default.createDirectory(at: legacyMirror, withIntermediateDirectories: true)
+_ = try ProcessRunner.run("/usr/bin/git", ["init", "--quiet", "-b", "main", legacyMirror.path])
+_ = try ProcessRunner.run("/usr/bin/git", ["-C", legacyMirror.path, "remote", "add", "origin", "https://github.com/me/graphitree-playbook.git"])
+let otherRepoMirror = PlaybookBackup.mirror(for: "https://github.com/me/graphitree-playbook-b.git", support: fakeSupport)
+check(FileManager.default.fileExists(atPath: legacyMirror.path) && !FileManager.default.fileExists(atPath: otherRepoMirror.path), "the old copy stays put for another repo")
+let movedMirror = PlaybookBackup.mirror(for: "https://github.com/me/graphitree-playbook.git", support: fakeSupport)
+check(!FileManager.default.fileExists(atPath: legacyMirror.path) && FileManager.default.fileExists(atPath: movedMirror.appendingPathComponent(".git").path), "the old copy moves to its own repo's folder")
+try? FileManager.default.removeItem(at: fakeSupport)
+
+let backupDefaults = checkSuite("playbook-backup")
+backupDefaults.set("github", forKey: "playbookStorage")
+backupDefaults.set("https://github.com/me/graphitree-playbook.git", forKey: "playbookRemote")
+backupDefaults.set("me", forKey: "playbookAccount")
+backupDefaults.set(1_800_000_000.0, forKey: "playbookLastBackup")
+let graphA = URL(fileURLWithPath: "/tmp/graphitree-a/graphify-out")
+let graphB = URL(fileURLWithPath: "/tmp/graphitree-b/graphify-out")
+let claimed = PlaybookBackupStore.load(for: graphA, defaults: backupDefaults)
+check(claimed.github && claimed.remote == "https://github.com/me/graphitree-playbook.git" && claimed.account == "me" && claimed.lastBackup == Date(timeIntervalSince1970: 1_800_000_000), "the first graph takes over the settings older versions shared")
+expectEqual(PlaybookBackupStore.load(for: graphB, defaults: backupDefaults), PlaybookBackupSettings(), "another graph starts with its own, empty")
+PlaybookBackupStore.update(for: graphB, defaults: backupDefaults) { $0.remote = "https://github.com/me/graphitree-playbook-b.git" }
+expectEqual(PlaybookBackupStore.load(for: graphA, defaults: backupDefaults).remote, "https://github.com/me/graphitree-playbook.git", "each graph keeps its own repo")
+expectEqual(PlaybookBackup.defaultRepoName(singleRepo: nil), "graphitree-playbook", "the machine-wide graph's repo keeps the plain name")
+expectEqual(PlaybookBackup.defaultRepoName(singleRepo: "my app"), "graphitree-playbook-my-app", "a single repo's graph gets a repo named after it")
+
+expectEqual(SessionDigest.redacted("use sk-ant-api03-AbCdEf0123456789xyz for it"), "use [redacted] for it", "API keys are taken out")
+expectEqual(SessionDigest.redacted("push with ghp_0123456789abcdefABCDEF0123 now"), "push with [redacted] now", "GitHub tokens are taken out")
+expectEqual(SessionDigest.redacted("password: hunter2 and API_KEY=abc"), "password: [redacted] and API_KEY=[redacted]", "passwords keep their label")
+expectEqual(SessionDigest.redacted("AKIAABCDEFGHIJKLMNOP"), "[redacted]", "AWS keys are taken out")
+expectEqual(SessionDigest.redacted("token eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"), "token [redacted]", "JWTs are taken out")
+let ordinary = "Use the weather-widget-lockscreen-fix branch in /Users/me/Documents/GitHub/personal/studio and keep shop-oms-2026-q4"
+expectEqual(SessionDigest.redacted(ordinary), ordinary, "ordinary words, paths and project names stay")
 
 // MARK: - Playbook in the guide and the graph
 
@@ -1915,7 +2021,7 @@ expectEqual(rootEntries.first?.name, "Machine-wide", "graph at the root is the m
 // MARK: - Application Support
 
 let supportFolder = AppSupport.root.appendingPathComponent(AppSupport.folderName).path + "/"
-let keptInSupport = [UsageLog.url, DocsRunLog.url, PlaybookBackup.mirror, ChatStore.url(for: URL(fileURLWithPath: "/g/graphify-out")), try GraphIndex.defaultCacheDirectory()]
+let keptInSupport = [UsageLog.url, DocsRunLog.url, PlaybookBackup.mirrorFolder(for: "https://github.com/me/graphitree-playbook.git"), ChatStore.url(for: URL(fileURLWithPath: "/g/graphify-out")), try GraphIndex.defaultCacheDirectory()]
 check(keptInSupport.allSatisfy { $0.path.hasPrefix(supportFolder) }, "everything the app keeps in Application Support is in Graphitree's folder there")
 
 // MARK: - Arrange and back up
