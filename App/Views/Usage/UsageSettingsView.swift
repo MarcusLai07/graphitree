@@ -69,6 +69,7 @@ struct UsageSettingsView: View {
                     Toggle("", isOn: $showsMenuBar).labelsHidden()
                 }
                 .onChange(of: showsMenuBar) { _, on in
+                    MenuBarItem.presence.settingChanged()
                     if !on, opensAtLogin { setLogin(false) }
                     DockPresence.update()
                 }

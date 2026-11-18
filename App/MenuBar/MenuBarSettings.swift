@@ -23,6 +23,13 @@ enum MenuBarFigures: String, CaseIterable, Identifiable {
     }
 }
 
+/// The menu bar item's visibility as AppKit last reported it. Kept in memory only, so a hide from
+/// outside lasts until Graphitree quits, the setting changes, or whatever hid it shows it again.
+@MainActor
+enum MenuBarItem {
+    static var presence = MenuBarPresence()
+}
+
 /// The menu bar item's settings, in Graphitree's defaults. Used and Left is the Usage page's own
 /// switch (`ClaudeUsageStore.Key.showLeft`), and applies to the menu bar and widgets too.
 enum MenuBarSettings {

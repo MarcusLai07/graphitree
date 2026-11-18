@@ -73,11 +73,20 @@ struct GraphitreeApp: App {
 
         // The plan's limits at a glance. While it's on, Graphitree keeps running with its window
         // closed, out of the Dock, so the readings, widgets and notifications keep going.
-        MenuBarExtra(isInserted: $showsMenuBar) {
+        MenuBarExtra(isInserted: menuBarInserted) {
             MenuBarView()
         } label: {
             MenuBarLabel()
         }
         .menuBarExtraStyle(.window)
+    }
+
+    /// The menu bar item's place: the setting, unless something outside Graphitree hid the item.
+    /// What AppKit reports goes to `MenuBarItem.presence`, never to the setting (`MenuBarPresence`).
+    private var menuBarInserted: Binding<Bool> {
+        Binding(
+            get: { MenuBarItem.presence.isInserted(setting: showsMenuBar) },
+            set: { MenuBarItem.presence.report(visible: $0, setting: showsMenuBar) }
+        )
     }
 }

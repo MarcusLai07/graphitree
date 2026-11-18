@@ -97,6 +97,31 @@ func menuBarAndWidgetChecks() throws {
     expectEqual(UsageAlerts.due(.codex, snapshot: steadyReading, samples: nil, settings: settings, notified: [], now: now), [],
                 "without readings there's no pace")
 
+    // MARK: The menu bar item's place
+
+    var presence = MenuBarPresence()
+    check(presence.isInserted(setting: true), "with the setting on, the item is in the menu bar")
+    check(!presence.isInserted(setting: false), "with it off, it isn't")
+    // Graphitree's own placing is reported back the same way. Reported again and again, as
+    // SwiftUI does, it changes nothing, so it can't feed itself (0.2.0 hung on that).
+    var settled = presence
+    for _ in 0..<3 { settled.report(visible: true, setting: true) }
+    expectEqual(settled, presence, "the item reported where Graphitree put it changes nothing")
+    presence.report(visible: false, setting: true)
+    check(!presence.isInserted(setting: true), "hidden from outside with the setting on, it isn't put back")
+    let hidden = presence
+    for _ in 0..<3 { presence.report(visible: false, setting: true) }
+    expectEqual(presence, hidden, "the same hide reported again changes nothing")
+    presence.report(visible: true, setting: true)
+    check(presence.isInserted(setting: true), "shown again from outside, it's back")
+    presence.report(visible: false, setting: true)
+    presence.report(visible: false, setting: false)
+    check(presence.isInserted(setting: true), "removed because the setting went off, it's back when the setting is on")
+    presence.report(visible: false, setting: true)
+    presence.settingChanged()
+    check(presence.isInserted(setting: true), "changing the setting brings back an item hidden from outside")
+    check(!presence.isInserted(setting: false), "unless it's now off")
+
     // MARK: Open at login
 
     let home = manager.temporaryDirectory.appendingPathComponent("graphitree-menubar-\(UUID().uuidString)")
