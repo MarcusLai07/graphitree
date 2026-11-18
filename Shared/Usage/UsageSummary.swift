@@ -370,6 +370,7 @@ enum UsageSummary {
         case "codex": return "Codex"
         case "copilot-cli": return "Copilot CLI"
         case "gemini-cli": return "Gemini CLI"
+        case "opencode": return "OpenCode"
         case "other": return "Other"
         default: return key
         }
@@ -379,7 +380,7 @@ enum UsageSummary {
         switch key {
         case "claude-desktop", "codex-app": return "macwindow"
         case "claude-vscode", "claude-jetbrains", "codex-vscode": return "chevron.left.forwardslash.chevron.right"
-        case "cli", "codex-cli", "codex-exec", "copilot-cli", "gemini-cli": return "terminal"
+        case "cli", "codex-cli", "codex-exec", "copilot-cli", "gemini-cli", "opencode": return "terminal"
         case "sdk", "codex-mcp": return "shippingbox"
         case "local-agent": return "sparkles"
         default: return "questionmark.app"

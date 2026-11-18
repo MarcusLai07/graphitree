@@ -65,6 +65,11 @@ A downloaded copy is removed from wherever it is, Downloads included. The disk i
 | `~/Library/Application Support/Graphitree/Indexes` | The app | Disposable SQLite indexes. |
 | `~/.claude/projects`, `~/Library/Application Support/Claude/local-agent-mode-sessions` | Claude Code, Claude Desktop | Read only, by the Usage page, to count Claude Code's calls on this Mac. |
 | `~/.codex/sessions`, `~/.codex/archived_sessions` | Codex | Read only, by the Usage page, for Codex's calls and its plan's limits. Compressed logs (`.jsonl.zst`) are read with Homebrew's `zstd` when it's installed. |
+| `~/.gemini/tmp`, `~/.cache/.gemini/tmp`, `~/.gemini/projects.json` | Gemini CLI | Read only, by the Usage page, for Gemini CLI's calls, while AI Models lists it under Connected. |
+| `~/.gemini/oauth_creds.json`, `~/.gemini/settings.json`, `~/.gemini/.env` | Gemini CLI | Read only, to ask Google for a Code Assist plan's daily limits. Never refreshed or changed. |
+| `~/.copilot/session-state` | Copilot CLI | Read only, by the Usage page, for Copilot CLI's calls, while AI Models lists it under Connected. |
+| `gh auth token` | GitHub CLI | Run for Copilot's limits; the token goes only to `api.github.com`. Copilot CLI's own sign-in isn't read. |
+| `~/.local/share/opencode/opencode.db`, `~/.local/share/opencode/storage` | OpenCode | Read only, by the Usage page, for OpenCode's calls, and its Console sign-in for an OpenCode Go plan's limits, while AI Models lists it under Connected. |
 | Keychain item `Claude Code-credentials` | Claude Code | Read only, by the Usage page, to ask Anthropic for the plan's limits until you sign Graphitree in to Claude. Never refreshed or changed, so it can't sign Claude Code out. |
 | Keychain item `Graphitree Claude sign-in` | The app | Only once you sign in to Claude in Graphitree. Its own tokens for the plan's limits, renewed by Graphitree. Apart from Claude Code's, so renewing it can't sign Claude Code out. Sign Out in Menu Bar & Alerts deletes it. |
 | `~/Library/Application Support/Graphitree/ClaudeUsage` | The app | The last plan reading, a reading every 5 minutes while the app runs (`usage-history.jsonl`), and a disposable transcript cache. |
@@ -101,6 +106,18 @@ The Usage page, under AI Models in the rail, is ported from [Claude Usage](https
 **Codex**
 - Everything comes from Codex's own session logs, so there's no sign-in, keychain or network. Each reply logs the plan's 5-hour and weekly limits (`rate_limits` on `token_count`), so the limits are as of Codex's last reply and the left-over-time chart is drawn from the logs themselves. Signed in with an API key, Codex has no plan limits.
 - Calls come from `token_usage_record` lines (one per response, newer Codex) or else `token_count` events, counted once even when a forked session repeats them. Cost is at OpenAI API list prices, long-context rates included. The format follows Codex's source (openai/codex, `codex-rs/protocol` and `codex-rs/history`).
+
+**Gemini CLI**
+- Calls come from Gemini CLI's chat logs, `~/.gemini/tmp/<project>/chats` (and `~/.cache/.gemini/tmp` when it runs in its macOS sandbox): each session's `.jsonl`, older single-file `.json` sessions, and subagents' logs. Tokens are fresh input + output + cached input, with thinking inside output. Gemini CLI records no cost, and Graphitree has no Gemini prices yet, so its calls show without one. The format follows Gemini CLI's source (google-gemini/gemini-cli, `chatRecordingService.ts`).
+- Plan limits come only for Code Assist Standard and Enterprise accounts. Google ended Gemini CLI's sign-in for personal accounts, including AI Pro and Ultra, on 18 June 2026, and an API key has no plan limits to read. Graphitree borrows Gemini CLI's sign-in from `~/.gemini/oauth_creds.json`, read only, and asks Google's `cloudcode-pa.googleapis.com` (`loadCodeAssist`, then `retrieveUserQuota`) for each model's daily quota. It never renews Gemini CLI's sign-in: when that runs out, open Gemini CLI.
+
+**GitHub Copilot**
+- Plan limits are the monthly premium requests, or AI Credits on the monthly plans that moved to them in June 2026, from GitHub's `api.github.com/copilot_internal/user`, the endpoint Copilot itself reads. Graphitree asks the GitHub CLI for its sign-in (`gh auth token`, so sign in with `gh auth login`); it never reads Copilot CLI's own sign-in. The account is whichever one `gh` has active.
+- Calls come from Copilot CLI's session logs, `~/.copilot/session-state/<session>/events.jsonl`. They record each reply's output tokens only, and no cost. Copilot in your editor and on github.com count toward the same requests but leave no trace here.
+
+**OpenCode**
+- Calls come from OpenCode's database, `~/.local/share/opencode/opencode.db` (or `$OPENCODE_DB`), opened read only: OpenCode 2's `session_message` and `session_v2`, 1.x's `message` and `session`, and before that its `storage` JSON files, each call counted once. Cost is what OpenCode recorded. Calls it sent through your Claude or ChatGPT plan also count toward those plans' limits, shown under Claude and Codex.
+- Plan limits come only with an OpenCode Go plan: its 5-hour, weekly and monthly limits from `opencode.ai/zen/go/v1/usage`. The request uses OpenCode's own sign-in to OpenCode Console, read from the same database's `credential` table and never renewed or changed. The scan of calls never reads that table.
 
 **Menu bar, widgets and notifications**
 

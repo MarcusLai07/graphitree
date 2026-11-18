@@ -29,7 +29,8 @@ func shootWidgets(folder: URL) async throws {
     func entry() -> UsageEntry { UsageEntry(date: now, provider: provider, feed: feed) }
 
     try await render(PopoverChrome { MenuBarView() }, size: nil, to: folder.appendingPathComponent("popover.png"))
-    let figures = MenuBarIcon.figures(feed.plan(provider)?.snapshot?.asOf(now), showLeft: showLeft)
+    let figures = feed.plan(provider)?.limits.map { MenuBarIcon.figures($0.asOf(now).windows, showLeft: showLeft) }
+        ?? MenuBarIcon.figures(feed.plan(provider)?.snapshot?.asOf(now), showLeft: showLeft)
     try await render(Image(nsImage: MenuBarIcon.label(figures)).renderingMode(.template).foregroundStyle(.white)
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Color(white: 0.16)),
@@ -85,7 +86,20 @@ private func sampleFeed(now: Date, showLeft: Bool) -> WidgetFeed {
                                                         weekly: UsageWindow(utilization: 31, resetsAt: weeklyReset),
                                                         weeklyOpus: nil, weeklySonnet: nil, extra: nil),
                                 name: "ChatGPT Plus")
-    return WidgetFeed(written: now, showLeft: showLeft, metrics: [.session, .weekly, .weeklyFable], plans: [.claude: claude, .codex: codex])
+    // Made-up readings for the tools that report LimitReading.
+    let monthStart = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: now)) ?? now
+    let nextMonth = Calendar.current.date(byAdding: .month, value: 1, to: monthStart) ?? now
+    let copilot = WidgetFeed.Plan(limits: LimitReading(fetchedAt: now.addingTimeInterval(-90), windows: [
+        LimitWindow(id: "premium", title: "Premium requests", utilization: 64, resetsAt: nextMonth,
+                    span: nextMonth.timeIntervalSince(monthStart), detail: "192 of 300 used"),
+    ], plan: "Copilot Pro"), name: "Copilot Pro")
+    let tomorrow = Calendar.current.startOfDay(for: now).addingTimeInterval(86400)
+    let gemini = WidgetFeed.Plan(limits: LimitReading(fetchedAt: now.addingTimeInterval(-120), windows: [
+        LimitWindow(id: "gemini-2.5-pro", title: "Gemini 2.5 Pro · daily", utilization: 38, resetsAt: tomorrow, span: 86400),
+        LimitWindow(id: "gemini-2.5-flash", title: "Gemini 2.5 Flash · daily", utilization: 12, resetsAt: tomorrow, span: 86400),
+    ], plan: "Code Assist Standard"), name: "Code Assist Standard")
+    return WidgetFeed(written: now, showLeft: showLeft, metrics: [.session, .weekly, .weeklyFable],
+                      plans: [.claude: claude, .codex: codex, .copilot: copilot, .gemini: gemini])
 }
 
 // MARK: - Drawing
