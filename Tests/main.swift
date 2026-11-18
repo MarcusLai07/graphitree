@@ -71,6 +71,7 @@ if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--stack" {
         print(question.title + ": " + found.joined(separator: ", "))
     }
     print("Libraries: " + result.libraries.map { "\($0.key) \($0.value.count)" }.sorted().joined(separator: ", "))
+    print("Other packages: " + result.otherPackages.filter { $0.value.count > 1 }.map { "\($0.key) \($0.value.count)" }.sorted().joined(separator: ", "))
     exit(0)
 }
 
@@ -1101,11 +1102,12 @@ func put(_ path: String, _ text: String) throws {
     try FileManager.default.createDirectory(atPath: (full as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
     try text.write(toFile: full, atomically: true, encoding: .utf8)
 }
-try put("personal/web/package.json", #"{"dependencies":{"next":"15","react":"19","sonner":"2","@radix-ui/react-dialog":"1"},"devDependencies":{"typescript":"5","tailwindcss":"4","vitest":"3"}}"#)
+try put("personal/web/package.json", #"{"dependencies":{"next":"15","react":"19","sonner":"2","@radix-ui/react-dialog":"1","some-widget":"1","@me/admin":"*"},"devDependencies":{"typescript":"5","tailwindcss":"4","vitest":"3","@types/node":"22"}}"#)
 try put("personal/web/components.json", "{}")
 try put("personal/web/vercel.json", "{}")
 try put("personal/web/node_modules/nuxt/package.json", #"{"dependencies":{"nuxt":"3"}}"#)
-try put("personal/web/apps/admin/package.json", #"{"dependencies":{"vite":"6","react":"19","sonner":"2"}}"#)
+try put("personal/web/apps/admin/package.json", #"{"name":"@me/admin","dependencies":{"vite":"6","react":"19","sonner":"2"}}"#)
+try put("graphify-out.before-fresh/2026-11-11/package.json", #"{"dependencies":{"astro":"5"}}"#)
 try put("personal/mac/project.yml", "targets:\n  App:\n    platform: macOS\n")
 try put("personal/mac/Package.swift", ".package(url: \"https://github.com/groue/GRDB.swift\", from: \"7.0.0\")")
 try put("work/api/requirements.txt", "fastapi>=0.110\npsycopg2-binary==2.9\n# comment\n")
@@ -1127,7 +1129,26 @@ expectEqual(scanned.projects(using: "pytest", for: "testing"), 1, "dev tools in 
 expectEqual(scanned.projects(using: "TypeScript", for: "languages"), 1, "TypeScript is found")
 expectEqual(scanned.libraries["Sonner"], ["personal/web"], "known libraries are found and credited once per project")
 check(!StackScan.packageNames(in: (scanRoot as NSString).appendingPathComponent("work/py")).contains("name"), "pyproject keys aren't read as packages")
+expectEqual(scanned.projects(using: "Astro", for: "web"), 0, "a copy of graphify-out isn't read")
+expectEqual(scanned.otherPackages["some-widget"], ["personal/web"], "a dependency no list knows is still reported")
+check(scanned.otherPackages["sonner"] == nil && scanned.otherPackages["react"] == nil && scanned.otherPackages["next"] == nil, "recognised dependencies aren't reported again")
+check(scanned.otherPackages["@types/node"] == nil, "type packages aren't reported")
+check(scanned.otherPackages["@me/admin"] == nil, "a monorepo's own packages aren't reported")
+check(PlaybookChat.scanText(scanned)?.contains("some-widget (1)") == true, "the chat is told about dependencies the scan doesn't recognise")
 try? FileManager.default.removeItem(atPath: scanRoot)
+
+// A hidden file such as .DS_Store sitting beside project folders mustn't hide any of them.
+let dotRoot = FileManager.default.temporaryDirectory.appendingPathComponent("graphitree-scan-dots-\(UUID().uuidString)").path
+for index in 0..<16 {
+    let folder = (dotRoot as NSString).appendingPathComponent("app\(index)")
+    try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+    try #"{"dependencies":{"animejs":"4"}}"#.write(toFile: (folder as NSString).appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+    try "x".write(toFile: (dotRoot as NSString).appendingPathComponent(".hidden\(index)"), atomically: true, encoding: .utf8)
+}
+let dotScan = StackScan.scan(root: dotRoot, projects: [])
+expectEqual(dotScan.projectsScanned, 16, "hidden files beside projects don't make the scan skip a project")
+expectEqual(dotScan.libraries["Anime.js"]?.count, 16, "anime.js is a known library")
+try? FileManager.default.removeItem(atPath: dotRoot)
 
 let envelope = #"{"type":"result","is_error":false,"result":"done","structured_output":{"libraries":[{"name":"Sonner","url":"https://sonner.emilkowal.ski","task":"Toasts","purpose":"Toasts.","useWhen":"Feedback.","avoidWhen":"unknown","install":"npm install sonner","platforms":"React","health":"Maintained."}]}}"#
 let drafts = try PlaybookResearch.parse(envelope)

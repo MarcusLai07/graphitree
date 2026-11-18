@@ -266,14 +266,24 @@ enum PlaybookChat {
         }
         let libraries = counted(scan.libraries)
         if !libraries.isEmpty { lines.append("- Libraries found: \(libraries)") }
+        let others = counted(scan.otherPackages, limit: otherPackagesLimit)
+        if !others.isEmpty {
+            lines.append("- Other dependencies, as package names the scan doesn't recognise. Build tools are mixed in, so judge which are libraries worth listing: \(others)")
+        }
         return lines.joined(separator: "\n")
     }
 
-    /// "Zod (2), Zustand (2), Lucide (1)": most used first, then by name.
-    private static func counted(_ uses: [String: Set<String>]) -> String {
+    /// Enough for every library a person uses, short enough to keep the prompt small.
+    static let otherPackagesLimit = 150
+
+    /// "Zod (2), Zustand (2), Lucide (1)": most used first, then by name. Past `limit`, the
+    /// rest are counted rather than named.
+    private static func counted(_ uses: [String: Set<String>], limit: Int = .max) -> String {
         let pairs: [(name: String, count: Int)] = uses.map { (name: $0.key, count: $0.value.count) }.filter { $0.count > 0 }
         let sorted = pairs.sorted { a, b in a.count == b.count ? a.name < b.name : a.count > b.count }
-        return sorted.map { "\($0.name) (\($0.count))" }.joined(separator: ", ")
+        var text = sorted.prefix(limit).map { "\($0.name) (\($0.count))" }.joined(separator: ", ")
+        if sorted.count > limit { text += ", and \(sorted.count - limit) more" }
+        return text
     }
 
     /// The turns the model sees: recent ones, errors left out, each reply with what it suggested.

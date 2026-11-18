@@ -27,6 +27,9 @@ struct StackScanResult: Equatable, Sendable {
     var stack: [String: [String: Set<String>]] = [:]
     /// Known libraries found, by display name, with the projects that use them.
     var libraries: [String: Set<String>] = [:]
+    /// Dependencies nothing above recognises, by package name, with the projects that use them.
+    /// Build tools are in here too: it's what the list of known libraries doesn't cover yet.
+    var otherPackages: [String: Set<String>] = [:]
     var projectsScanned = 0
 
     func projects(using option: String, for question: String) -> Int { stack[question]?[option]?.count ?? 0 }
@@ -118,21 +121,45 @@ enum StackScan {
         .init(package: "@number-flow/react", name: "NumberFlow", url: "https://number-flow.barvian.me", task: "Animated numbers"),
         .init(package: "motion", name: "Motion", url: "https://motion.dev", task: "Animation"),
         .init(package: "framer-motion", name: "Motion", url: "https://motion.dev", task: "Animation"),
+        .init(package: "animejs", name: "Anime.js", url: "https://animejs.com", task: "Animation"),
+        .init(package: "tw-animate-css", name: "tw-animate-css", url: "https://github.com/Wombosvideo/tw-animate-css", task: "Animation"),
+        .init(package: "three", name: "Three.js", url: "https://threejs.org", task: "3D graphics"),
+        .init(package: "@react-three/fiber", name: "React Three Fiber", url: "https://r3f.docs.pmnd.rs", task: "3D graphics"),
+        .init(package: "ogl", name: "OGL", url: "https://github.com/oframe/ogl", task: "3D graphics"),
         .init(package: "@radix-ui/*", name: "Radix UI", url: "https://www.radix-ui.com", task: "UI primitives"),
         .init(package: "radix-ui", name: "Radix UI", url: "https://www.radix-ui.com", task: "UI primitives"),
         .init(package: "@base-ui-components/react", name: "Base UI", url: "https://base-ui.com", task: "UI primitives"),
+        .init(package: "@base-ui/react", name: "Base UI", url: "https://base-ui.com", task: "UI primitives"),
+        .init(package: "@floating-ui/react", name: "Floating UI", url: "https://floating-ui.com", task: "Popover positioning"),
         .init(package: "lucide-react", name: "Lucide", url: "https://lucide.dev", task: "Icons"),
         .init(package: "recharts", name: "Recharts", url: "https://recharts.org", task: "Charts"),
+        .init(package: "chart.js", name: "Chart.js", url: "https://www.chartjs.org", task: "Charts"),
+        .init(package: "d3", name: "D3", url: "https://d3js.org", task: "Data visualization"),
+        .init(package: "mermaid", name: "Mermaid", url: "https://mermaid.js.org", task: "Diagrams"),
+        .init(package: "@xyflow/react", name: "React Flow", url: "https://reactflow.dev", task: "Node graphs"),
+        .init(package: "sigma", name: "Sigma.js", url: "https://www.sigmajs.org", task: "Network graphs"),
+        .init(package: "leaflet", name: "Leaflet", url: "https://leafletjs.com", task: "Maps"),
+        .init(package: "@tiptap/react", name: "Tiptap", url: "https://tiptap.dev", task: "Rich text editing"),
+        .init(package: "react-markdown", name: "react-markdown", url: "https://github.com/remarkjs/react-markdown", task: "Markdown"),
+        .init(package: "react-grid-layout", name: "React Grid Layout", url: "https://github.com/react-grid-layout/react-grid-layout", task: "Dashboard grids"),
+        .init(package: "@emoji-mart/react", name: "Emoji Mart", url: "https://github.com/missive/emoji-mart", task: "Emoji pickers"),
+        .init(package: "react-easy-crop", name: "react-easy-crop", url: "https://github.com/ValentinH/react-easy-crop", task: "Image cropping"),
+        .init(package: "driver.js", name: "Driver.js", url: "https://driverjs.com", task: "Product tours"),
+        .init(package: "@react-pdf/renderer", name: "React-pdf", url: "https://react-pdf.org", task: "PDF documents"),
+        .init(package: "react-router", name: "React Router", url: "https://reactrouter.com", task: "Routing"),
+        .init(package: "react-router-dom", name: "React Router", url: "https://reactrouter.com", task: "Routing"),
+        .init(package: "@tanstack/react-router", name: "TanStack Router", url: "https://tanstack.com/router", task: "Routing"),
         .init(package: "zustand", name: "Zustand", url: "https://zustand.docs.pmnd.rs", task: "State"),
         .init(package: "@tanstack/react-query", name: "TanStack Query", url: "https://tanstack.com/query", task: "Data fetching"),
         .init(package: "@tanstack/react-table", name: "TanStack Table", url: "https://tanstack.com/table", task: "Tables"),
         .init(package: "react-hook-form", name: "React Hook Form", url: "https://react-hook-form.com", task: "Forms"),
         .init(package: "zod", name: "Zod", url: "https://zod.dev", task: "Validation"),
         .init(package: "date-fns", name: "date-fns", url: "https://date-fns.org", task: "Dates"),
-        .init(package: "@dnd-kit/core", name: "dnd kit", url: "https://dndkit.com", task: "Drag and drop"),
+        .init(package: "@dnd-kit/*", name: "dnd kit", url: "https://dndkit.com", task: "Drag and drop"),
         .init(package: "react-virtuoso", name: "Virtuoso", url: "https://virtuoso.dev", task: "Long lists"),
         .init(package: "class-variance-authority", name: "cva", url: "https://cva.style", task: "Styling variants"),
         .init(package: "clsx", name: "clsx", url: "https://github.com/lukeed/clsx", task: "Class names"),
+        .init(package: "tailwind-merge", name: "tailwind-merge", url: "https://github.com/dcastil/tailwind-merge", task: "Class names"),
         .init(package: "next-themes", name: "next-themes", url: "https://github.com/pacocoursey/next-themes", task: "Dark mode"),
         .init(package: "shiki", name: "Shiki", url: "https://shiki.style", task: "Code highlighting"),
         .init(package: "input-otp", name: "input-otp", url: "https://input-otp.rodz.dev", task: "One-time codes"),
@@ -141,9 +168,11 @@ enum StackScan {
     ]
 
     private static let skippedFolders: Set<String> = [
-        "node_modules", ".git", "graphify-out", "dist", "build", ".next", ".nuxt", ".venv", "venv",
+        "node_modules", ".git", "dist", "build", ".next", ".nuxt", ".venv", "venv",
         "Pods", "DerivedData", "build.noindex", ".build", "target", "vendor", "coverage", ".turbo", ".cache",
     ]
+    /// The graph's own folder and copies of it, such as graphify-out.before-fresh.
+    private static let skippedPrefix = "graphify-out"
     private static let manifestNames: Set<String> = ["package.json", "pyproject.toml", "requirements.txt", "Package.swift", "project.yml", "go.mod", "Cargo.toml", "manifest.json", "CMakeLists.txt", "project.godot", "build.gradle.kts"]
 
     /// Walks the root for project folders (those with a manifest), up to `depth` levels down.
@@ -157,11 +186,13 @@ enum StackScan {
         if let walker = fileManager.enumerator(at: rootURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsPackageDescendants]) {
             for case let url as URL in walker {
                 let name = url.lastPathComponent
-                if skippedFolders.contains(name) || (name.hasPrefix(".") && name != ".github") {
-                    walker.skipDescendants()
+                let skipped = skippedFolders.contains(name) || name.hasPrefix(skippedPrefix) || (name.hasPrefix(".") && name != ".github")
+                if skipped || walker.level > depth {
+                    // Only on a folder. Called on a file such as .DS_Store, macOS skips the next
+                    // folder the walk reaches instead, and that whole project goes missing.
+                    if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { walker.skipDescendants() }
                     continue
                 }
-                if walker.level > depth { walker.skipDescendants(); continue }
                 if manifestNames.contains(name) || name.hasSuffix(".xcodeproj") {
                     folders.insert(url.deletingLastPathComponent().resolvingSymlinksInPath().path)
                 }
@@ -171,6 +202,7 @@ enum StackScan {
         let sortedProjects = projects.sorted { $0.count > $1.count }
         var result = StackScanResult()
         var credited: Set<String> = []
+        var ownPackages: Set<String> = []
         for folder in folders.sorted() {
             let relative = folder == root ? "" : folder.hasPrefix(root + "/") ? String(folder.dropFirst(root.count + 1)) : folder
             let project = sortedProjects.first { relative == $0 || relative.hasPrefix($0 + "/") } ?? relative
@@ -180,13 +212,17 @@ enum StackScan {
                 for option in options { result.stack[question, default: [:]][option, default: []].insert(project) }
             }
             for library in found.libraries { result.libraries[library, default: []].insert(project) }
+            for package in found.others { result.otherPackages[package, default: []].insert(project) }
+            if let own = ownPackageName(in: folder) { ownPackages.insert(own) }
         }
+        // A monorepo's apps depend on its own packages, which aren't libraries to recommend.
+        for own in ownPackages { result.otherPackages[own] = nil }
         result.projectsScanned = credited.count
         return result
     }
 
     /// What one folder uses.
-    static func fingerprint(folder: String) -> (stack: [String: Set<String>], libraries: Set<String>) {
+    static func fingerprint(folder: String) -> (stack: [String: Set<String>], libraries: Set<String>, others: Set<String>) {
         let packages = packageNames(in: folder)
         var stack: [String: Set<String>] = [:]
         for print in fingerprints {
@@ -196,7 +232,27 @@ enum StackScan {
         }
         var libraries: Set<String> = []
         for library in knownLibraries where matches(library.package, packages) { libraries.insert(library.name) }
-        return (stack, libraries)
+        let others = packages.filter { package in
+            !package.hasPrefix("@types/") && !recognisedPatterns.contains { recognises($0, package) }
+        }
+        return (stack, libraries, others)
+    }
+
+    private static let recognisedPatterns: [String] = fingerprints.flatMap(\.packages) + knownLibraries.map(\.package)
+
+    /// Whether one package is covered by a fingerprint or known-library pattern.
+    private static func recognises(_ pattern: String, _ package: String) -> Bool {
+        if pattern == "vite+react" { return package == "vite" || package == "react" }
+        return matches(pattern, [package])
+    }
+
+    /// The name a folder's package.json gives its own package.
+    private static func ownPackageName(in folder: String) -> String? {
+        let path = (folder as NSString).appendingPathComponent("package.json")
+        guard let data = FileManager.default.contents(atPath: path),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let name = object["name"] as? String, !name.isEmpty else { return nil }
+        return name.lowercased()
     }
 
     private static func matches(_ pattern: String, _ packages: Set<String>) -> Bool {
