@@ -14,7 +14,8 @@ import SwiftUI
 //
 // Panels: build, folders, playbook, agents, browse, insights, usage. The panels' own launch options pick the
 // state, such as `-buildMode home`, `-setupStep noise`, `-playbookTab stack`, `-agentsTab keys`
-// or `-readsDocsOnRebuild YES`. `-settle 6` is how many seconds to let the panel load, and
+// or `-readsDocsOnRebuild YES`. For the Playbook's libraries: `-playbookLibraryView list`,
+// `-playbookOpen <library name>` to open its card, or `-playbookReview YES` to start reviewing drafts. `-settle 6` is how many seconds to let the panel load, and
 // `-height 2000` makes the picture taller for long panels. Graphitree's
 // saved settings are read but never written: the tool writes only to its own defaults.
 

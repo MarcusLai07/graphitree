@@ -144,8 +144,16 @@ struct PlaybookLibrary: Codable, Identifiable, Hashable, Sendable {
     var useInstead: String = ""
     /// When the health note was last written, by hand or from research.
     var checkedOn: Date?
+    /// The name of another library in the playbook this one is used with, such as react-markdown
+    /// for remark-gfm. It's listed under that library instead of as a job of its own.
+    var pairsWith: String = ""
 
     var isDescribed: Bool { !purpose.isEmpty }
+
+    /// Its name as names are compared: lowercased, letters and digits only.
+    var nameKey: String { Self.key(name) }
+
+    static func key(_ name: String) -> String { name.lowercased().filter { $0.isLetter || $0.isNumber } }
 
     /// Not for new work: marked avoid, or, with no status set, a health note that says it's abandoned.
     var isAvoided: Bool { status == .avoid || (status == nil && looksAbandoned) }
@@ -224,6 +232,62 @@ struct Playbook: Codable, Equatable, Sendable {
         return PlaybookCategories.sorted(groups.keys).map { (category: $0, tasks: Self.byTask(groups[$0]!)) }
     }
 
+    /// The library this one is listed under: the one its pairsWith names. Nil when that isn't in
+    /// the playbook, when either of them is to be avoided, or when pairing would go round in a loop.
+    func partner(of library: PlaybookLibrary) -> PlaybookLibrary? {
+        func named(_ name: String, besides id: UUID) -> PlaybookLibrary? {
+            let key = PlaybookLibrary.key(name)
+            guard !key.isEmpty else { return nil }
+            return libraries.first { $0.id != id && $0.nameKey == key && !$0.isAvoided }
+        }
+        guard !library.isAvoided, let partner = named(library.pairsWith, besides: library.id) else { return nil }
+        // Follow the chain up: it has to end at a library that pairs with nothing.
+        var seen: Set<UUID> = [library.id]
+        var current = partner
+        while seen.insert(current.id).inserted {
+            guard let next = named(current.pairsWith, besides: current.id) else { return partner }
+            current = next
+        }
+        return nil
+    }
+
+    /// The libraries listed directly under this one, by name.
+    func companions(of library: PlaybookLibrary) -> [PlaybookLibrary] {
+        libraries.filter { partner(of: $0)?.id == library.id }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// This library's companions, theirs after each of them, with how deep each one sits (1 for a direct one).
+    func companionTree(of library: PlaybookLibrary) -> [(library: PlaybookLibrary, depth: Int)] {
+        var result: [(library: PlaybookLibrary, depth: Int)] = []
+        func walk(_ parent: PlaybookLibrary, _ depth: Int) {
+            for child in companions(of: parent) {
+                result.append((child, depth))
+                walk(child, depth + 1)
+            }
+        }
+        walk(library, 1)
+        return result
+    }
+
+    /// Like librariesByCategory, but a library that pairs with another isn't in a job of its own:
+    /// it's listed under that library (see companionTree).
+    var leadsByCategory: [(category: String, tasks: [(task: String, libraries: [PlaybookLibrary])])] {
+        var leads = self
+        leads.libraries = libraries.filter { partner(of: $0) == nil }
+        return leads.librariesByCategory
+    }
+
+    /// Every library in reading order: categories, jobs inside them, the pick first, and each
+    /// library followed by the ones that pair with it (depth 1 and deeper).
+    var outline: [(category: String, tasks: [(task: String, entries: [(library: PlaybookLibrary, depth: Int)])])] {
+        leadsByCategory.map { group in
+            (category: group.category, tasks: group.tasks.map { job in
+                (task: job.task, entries: job.libraries.flatMap { [(library: $0, depth: 0)] + companionTree(of: $0) })
+            })
+        }
+    }
+
     /// The rules for one category, or the ones that apply everywhere for "".
     func rules(for category: String) -> [PlaybookRule] {
         rules.filter { PlaybookCategories.canonical($0.category) == category && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -281,6 +345,7 @@ extension PlaybookLibrary {
         category = values.value(.category, or: "")
         useInstead = values.value(.useInstead, or: "")
         checkedOn = values.value(.checkedOn, or: nil)
+        pairsWith = values.value(.pairsWith, or: "")
     }
 }
 
@@ -586,12 +651,15 @@ enum PlaybookFile {
         }
         lines.append("- Entries marked *draft* were written by AI and not checked yet. Confirm details in their docs before relying on them.")
         lines.append("- Don't pick a library marked *avoid for new work*, even if it's listed. Use what it says to use instead.")
-        lines.append("- For a new project, start from Stack, and ask before going against it.")
 
         let kept = playbook.libraries.filter { !$0.isAvoided }
         var listed = Playbook()
         listed.libraries = kept
-        let categories = listed.librariesByCategory
+        if kept.contains(where: { listed.partner(of: $0) != nil }) {
+            lines.append("- A library listed under another one *pairs with* it, such as a plugin or a binding: use them together.")
+        }
+        lines.append("- For a new project, start from Stack, and ask before going against it.")
+        let categories = listed.leadsByCategory
         // Without categories, jobs are the sections, as before categories existed.
         let flat = categories.count == 1 && categories[0].category.isEmpty
         let shown = flat ? [] : categories.map(\.category).filter { !$0.isEmpty }
@@ -626,7 +694,13 @@ enum PlaybookFile {
                     lines.append("")
                     lines.append("\(flat ? "###" : "####") \(job.task.isEmpty ? "Other" : job.task)")
                     lines.append("")
-                    for library in job.libraries { lines.append(contentsOf: entry(library)) }
+                    for library in job.libraries {
+                        lines.append(contentsOf: entry(library))
+                        for (companion, depth) in listed.companionTree(of: library) {
+                            let partner = listed.partner(of: companion)
+                            lines.append(contentsOf: entry(companion, depth: depth, pairsWith: partner?.name ?? "", partnerTask: partner?.task ?? ""))
+                        }
+                    }
                 }
             }
         }
@@ -701,8 +775,10 @@ enum PlaybookFile {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// One library under its job: name and marks, then what AI tools need to use it well.
-    private static func entry(_ library: PlaybookLibrary) -> [String] {
+    /// One library under its job: name and marks, then what AI tools need to use it well. A library
+    /// that pairs with another is nested under it, `depth` levels in.
+    private static func entry(_ library: PlaybookLibrary, depth: Int = 0, pairsWith partner: String = "", partnerTask: String = "") -> [String] {
+        let indent = String(repeating: "  ", count: depth)
         var lines: [String] = []
         var head = "- **\(library.name)**"
         if !library.url.isEmpty { head += " (\(library.url))" }
@@ -717,6 +793,11 @@ enum PlaybookFile {
         if !library.verified { marks.append(library.isDescribed ? "draft" : "not described yet") }
         if !marks.isEmpty { head += " *\(marks.joined(separator: ", "))*" }
         lines.append(head)
+        if !partner.isEmpty {
+            let task = oneLine(library.task)
+            let job = task.isEmpty || task.caseInsensitiveCompare(oneLine(partnerTask)) == .orderedSame ? "" : " Job: \(sentence(task))"
+            lines.append("  Pairs with: \(partner).\(job)")
+        }
         if !library.purpose.isEmpty { lines.append("  \(oneLine(library.purpose))") }
         if !library.useWhen.isEmpty { lines.append("  Use when: \(oneLine(library.useWhen))") }
         if !library.avoidWhen.isEmpty { lines.append("  Avoid when: \(oneLine(library.avoidWhen))") }
@@ -730,7 +811,7 @@ enum PlaybookFile {
             lines.append("  Health\(checked): \(oneLine(library.health))")
         }
         if !library.notes.isEmpty { lines.append("  Owner's note: \(oneLine(library.notes))") }
-        return lines
+        return lines.map { indent + $0 }
     }
 
     /// A date as 2026-11-23, in the Mac's time zone.
@@ -800,19 +881,22 @@ enum PlaybookFile {
     static func guideSummary(_ playbook: Playbook) -> [String] {
         var lines: [String] = []
         var jobs: [String] = []
-        // Jobs in category order, so related ones sit together. Candidates aren't picks yet.
-        for group in playbook.librariesByCategory.flatMap(\.tasks) {
+        // Jobs in category order, so related ones sit together. Candidates aren't picks yet. A
+        // library that pairs with another follows it, as "react-markdown + remark-gfm".
+        for group in playbook.leadsByCategory.flatMap(\.tasks) {
             var use: [String] = []
             var keep: [String] = []
             var avoid: [String] = []
             for library in group.libraries where library.status != .candidate {
+                let pairs = playbook.companionTree(of: library).map(\.library).filter { $0.status != .candidate }.map(\.name)
+                let together = pairs.isEmpty ? "" : " + " + pairs.joined(separator: " + ")
                 if library.isAvoided {
                     let instead = oneLine(library.useInstead)
                     avoid.append(instead.isEmpty ? library.name : "\(library.name) (use \(instead))")
                 } else if library.status == .legacy {
-                    keep.append(library.name)
+                    keep.append(library.name + together)
                 } else {
-                    use.append(library.status == .narrow ? "\(library.name) (narrow)" : library.name)
+                    use.append((library.status == .narrow ? "\(library.name) (narrow)" : library.name) + together)
                 }
             }
             var parts: [String] = []

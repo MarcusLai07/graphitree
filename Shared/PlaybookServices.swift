@@ -83,6 +83,8 @@ struct LibraryDraft: Codable, Equatable, Sendable {
     var status: String? = nil
     var category: String? = nil
     var useInstead: String? = nil
+    /// The exact name of the library it pairs with, "none" to unpair it, empty to keep what's there.
+    var pairsWith: String? = nil
 }
 
 enum PlaybookResearch {
@@ -168,6 +170,7 @@ enum PlaybookResearch {
         if let status = keep(draft.status).flatMap({ LibraryStatus(rawValue: $0.lowercased()) }) { result.status = status }
         if let category = keep(draft.category) { result.category = PlaybookCategories.canonical(category) }
         result.useInstead = keep(draft.useInstead) ?? result.useInstead
+        if let partner = keep(draft.pairsWith) { result.pairsWith = partner.lowercased() == "none" ? "" : partner }
         result.verified = false
         result.drafted = true
         return result

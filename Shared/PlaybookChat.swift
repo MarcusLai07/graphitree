@@ -157,7 +157,7 @@ enum PlaybookChat {
         func strings(_ names: [String]) -> [String: Any] {
             Dictionary(uniqueKeysWithValues: names.map { ($0, ["type": "string"] as [String: Any]) })
         }
-        let libraryFields = ["name", "url", "task", "purpose", "useWhen", "avoidWhen", "install", "platforms", "health", "category", "useInstead", "reason"]
+        let libraryFields = ["name", "url", "task", "purpose", "useWhen", "avoidWhen", "install", "platforms", "health", "category", "useInstead", "pairsWith", "reason"]
         var libraryProperties = strings(libraryFields)
         libraryProperties["status"] = ["type": "string", "enum": [""] + LibraryStatus.allCases.map(\.rawValue)]
         let library: [String: Any] = [
@@ -214,6 +214,7 @@ enum PlaybookChat {
         lines.append("- A library change describes one library fully: name, url, task (2 to 4 words for the job, such as \"Toasts\"; reuse a task already in the playbook when it fits), purpose (one sentence), useWhen, avoidWhen, install, platforms, health (is it maintained: latest release and year). Write \"unknown\" for anything you can't confirm. To update a library already in the playbook, use its exact name.")
         lines.append("- A library change also has a category, a status and useInstead. category is one of the categories below, spelled as shown. status is default (the pick for its job), narrow (kept only for the job or place its notes describe), legacy (stays in projects that use it; not for new work), candidate (being considered; AI tools ask first) or avoid (not for new work). useInstead names what to pick instead, for legacy and avoid; otherwise it's empty. Leave category, status or useInstead empty to keep what the library has now, and only change them when the owner asks.")
         lines.append("- A job has one default. Put what the owner says about where a narrow or legacy library may be used in useWhen and avoidWhen.")
+        lines.append("- pairsWith is the exact name of another library in the playbook that this one is used together with, such as react-markdown for remark-gfm: a plugin, a binding or a helper for it. The library is then listed under that one instead of as a job of its own. Write none to unpair it, and leave it empty to keep what it has.")
         lines.append("- A stack change gives the complete new list of choices for one question. Use the option names below where they fit; other names are allowed. notes holds exceptions, or is empty.")
         lines.append("- A habit change gives the complete new text for one prompt. Keep what's already there unless the owner asks to replace it.")
         lines.append("- A rule change adds a rule that isn't about one library, such as \"One primitive system per app\": text is one short instruction, and category is one of the categories below, or empty for a rule that applies everywhere. To change a rule, put its current text in replaces; to remove one, put its text in replaces and leave text empty. Otherwise replaces is empty.")
@@ -268,6 +269,7 @@ enum PlaybookChat {
                 line += " [\(marks.joined(separator: ", "))]"
                 if !library.purpose.isEmpty { line += ": \(library.purpose)" }
                 if !library.useInstead.isEmpty { line += " Use instead: \(library.useInstead)." }
+                if !library.pairsWith.isEmpty { line += " Pairs with: \(library.pairsWith)." }
                 if !library.notes.isEmpty { line += " Owner's note: \(library.notes)" }
                 lines.append(line)
             }
@@ -421,7 +423,8 @@ enum PlaybookChat {
                 name: text(item, "name"), url: text(item, "url"), task: text(item, "task"), purpose: text(item, "purpose"),
                 useWhen: text(item, "useWhen"), avoidWhen: text(item, "avoidWhen"), install: text(item, "install"),
                 platforms: text(item, "platforms"), health: text(item, "health"),
-                status: text(item, "status"), category: text(item, "category"), useInstead: text(item, "useInstead")
+                status: text(item, "status"), category: text(item, "category"), useInstead: text(item, "useInstead"),
+                pairsWith: text(item, "pairsWith")
             )
             guard !draft.name.isEmpty else { continue }
             changes.append(PlaybookChange(kind: .library, reason: text(item, "reason"), library: draft))

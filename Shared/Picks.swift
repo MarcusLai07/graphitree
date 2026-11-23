@@ -77,7 +77,8 @@ enum PlaybookPicks {
 
     // MARK: Text for tools
 
-    static func describe(_ library: PlaybookLibrary) -> String {
+    /// One library for a tool. With the playbook, it also names what the library pairs with.
+    static func describe(_ library: PlaybookLibrary, in playbook: Playbook? = nil) -> String {
         var marks: [String] = []
         if library.isAvoided {
             marks.append("avoid for new work")
@@ -97,6 +98,14 @@ enum PlaybookPicks {
         if !library.useWhen.isEmpty { lines.append("  Use when: \(library.useWhen)") }
         if !library.avoidWhen.isEmpty { lines.append("  Avoid when: \(library.avoidWhen)") }
         if !library.useInstead.isEmpty { lines.append("  Use instead: \(library.useInstead)") }
+        if let partner = playbook?.partner(of: library) {
+            lines.append("  Pairs with: \(partner.name). Use them together.")
+        } else if !library.pairsWith.isEmpty {
+            lines.append("  Pairs with: \(library.pairsWith)")
+        }
+        if let pairs = playbook?.companions(of: library), !pairs.isEmpty {
+            lines.append("  Pairs with it: \(pairs.map(\.name).joined(separator: ", "))")
+        }
         if !library.install.isEmpty { lines.append("  Install: \(library.install)") }
         if !library.health.isEmpty { lines.append("  Health: \(library.health)") }
         if !library.notes.isEmpty { lines.append("  Owner's note: \(library.notes)") }
@@ -110,7 +119,7 @@ enum PlaybookPicks {
             return "The owner's playbook has no pick for \"\(query)\". Ask before adding a library for it." + (jobs.isEmpty ? "" : " Jobs it covers: \(jobs.joined(separator: ", ")).")
         }
         let best = matches.prefix(4)
-        var text = best.map { describe($0.library) }.joined(separator: "\n\n")
+        var text = best.map { describe($0.library, in: playbook) }.joined(separator: "\n\n")
         if best.allSatisfy({ $0.library.isAvoided }) {
             let instead = best.map(\.library.useInstead).filter { !$0.isEmpty }
             text += instead.isEmpty

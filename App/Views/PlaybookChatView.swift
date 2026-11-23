@@ -290,6 +290,9 @@ struct PlaybookChatView: View {
             var parts: [String] = []
             if !filed.isEmpty { parts.append(filed) }
             if let status { parts.append(status.title + (known(library.useInstead).map { ", use \($0) instead" } ?? "")) }
+            if let partner = known(library.pairsWith) {
+                parts.append(partner.lowercased() == "none" ? "Pairs with nothing" : "Pairs with \(partner)")
+            }
             if let purpose = known(library.purpose) { parts.append(purpose) }
             return parts.isEmpty ? nil : parts.joined(separator: ". ")
         case .stack:

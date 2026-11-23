@@ -25,6 +25,24 @@ struct PlaybookView: View {
     @State private var editing: UUID?
     @State private var drafting: Set<UUID> = []
     @State private var pendingRemoval: UUID?
+    @AppStorage("playbookLibraryView") private var libraryLayout: LibraryLayout = .map
+    @State private var search = ""
+    @State private var statusFilter: LibraryFilter = .all
+    /// One category's libraries only; nil shows them all.
+    @State private var categoryFilter: String?
+    /// The library open in the list, as its full card.
+    @State private var expanded: UUID?
+    @State private var hoveredRow: UUID?
+    /// A library to bring into view, such as one picked on the map.
+    @State private var scrollTarget: UUID?
+    @State private var isAdding = false
+    @State private var isShowingCheck = false
+    /// The category whose rules are showing in a popover, "" for everywhere.
+    @State private var shownRules: String?
+    /// Drafts being reviewed one at a time, in order. Empty when not reviewing.
+    @State private var reviewQueue: [UUID] = []
+    @State private var reviewIndex = 0
+    @State private var reviewVerified = 0
 
     // Stack
     @State private var scan: StackScanResult?
@@ -66,21 +84,33 @@ struct PlaybookView: View {
             if tab == .chat {
                 PlaybookChatView(playbook: playbook, scan: scan, apply: applyChange, openModels: openModels)
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text(tab.intro).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        switch tab {
-                        case .chat: EmptyView()
-                        case .libraries: librariesTab
-                        case .stack: stackTab
-                        case .habits: habitsTab
-                        case .storage: storageTab
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text(tab.intro).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            switch tab {
+                            case .chat: EmptyView()
+                            case .libraries: librariesTab
+                            case .rules: rulesTab
+                            case .stack: stackTab
+                            case .habits: habitsTab
+                            case .storage: storageTab
+                            }
+                        }
+                        .padding([.horizontal, .bottom], 18)
+                        .padding(.top, 4)
+                        .frame(maxWidth: 760, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .onChange(of: scrollTarget) { _, target in
+                        guard let target else { return }
+                        // After the list has drawn the row.
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(80))
+                            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(target, anchor: .top) }
+                            scrollTarget = nil
                         }
                     }
-                    .padding([.horizontal, .bottom], 18)
-                    .padding(.top, 4)
-                    .frame(maxWidth: 760, alignment: .leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -105,6 +135,7 @@ struct PlaybookView: View {
         let habits = PlaybookQuestions.habits.filter { !(playbook.habits[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
         return HStack(spacing: 8) {
             tile("Libraries", symbol: "books.vertical.fill", value: "\(playbook.libraries.count)", detail: playbook.libraries.isEmpty ? "None yet" : "\(verified) verified") { tab = .libraries }
+            tile("Rules", symbol: "list.bullet.rectangle.fill", value: "\(playbook.rules.count)", detail: playbook.rules.isEmpty ? "None yet" : "\(playbook.rules(for: "").count) everywhere") { tab = .rules }
             tile("Stack", symbol: "square.stack.3d.up.fill", value: "\(answered)/\(PlaybookQuestions.stack.count)", detail: "answered") { tab = .stack }
             tile("How you work", symbol: "person.text.rectangle.fill", value: "\(habits)/\(PlaybookQuestions.habits.count)", detail: "filled in") { tab = .habits }
             tile("Stored", symbol: backup.github ? "lock.icloud.fill" : "internaldrive.fill", value: backup.github ? "GitHub" : "This Mac", detail: backupDetail) { tab = .storage }
@@ -153,161 +184,630 @@ struct PlaybookView: View {
 
     private var librariesTab: some View {
         VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Add libraries").font(.body.weight(.medium))
-                Text("One per line: a name, a link, or \"Name – link\". Paste a whole list at once.").font(.caption).foregroundStyle(.secondary)
-                TextEditor(text: $addText)
-                    .font(.system(.callout, design: .monospaced))
-                    .scrollContentBackground(.hidden)
-                    .frame(height: 64)
-                    .padding(6)
-                    .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
-                HStack {
-                    Spacer()
-                    Button("Add") { addPasted() }
-                        .buttonStyle(GoldButtonStyle())
-                        .disabled(addText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-            .modifier(RowCard())
-
-            if !suggestions.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Already in your projects").font(.body.weight(.medium))
-                    FlowLayout(spacing: 6) {
-                        ForEach(suggestions, id: \.name) { item in
-                            Button { addKnown(item.library) } label: {
-                                Label("\(item.name) · \(item.projects)", systemImage: "plus").font(.caption)
-                            }
-                            .buttonStyle(ChipStyle(isOn: false))
-                            .help("Used in \(item.projects) project\(item.projects == 1 ? "" : "s"). Add it to the playbook.")
-                        }
-                    }
-                }
-                .modifier(RowCard())
-            }
-
-            if !undescribed.isEmpty || !drafting.isEmpty {
-                HStack(spacing: 10) {
-                    Image(systemName: "sparkles").foregroundStyle(Palette.gold)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(drafting.isEmpty ? "\(undescribed.count) librar\(undescribed.count == 1 ? "y has" : "ies have") no details yet" : "Claude is researching \(drafting.count) librar\(drafting.count == 1 ? "y" : "ies")…")
-                            .font(.body.weight(.medium))
-                        Text("Claude Code looks each one up on the web, using your plan, about 30 seconds for six. You check its drafts before AI tools rely on them.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    if drafting.isEmpty {
-                        Button("Draft with Claude") { Task { await draft(undescribed) } }.buttonStyle(GoldButtonStyle())
-                    } else {
-                        ProgressView().controlSize(.small)
-                    }
-                }
-                .modifier(RowCard())
-            }
-
             if playbook.libraries.isEmpty {
+                addPanel.modifier(RowCard())
                 Text("No libraries yet. Paste your list above, or add ones your projects already use.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            } else if !reviewQueue.isEmpty {
+                reviewPanel
             } else {
-                healthCheckCard
-                if !LabCatalog.bundled.entries.isEmpty { labCard }
+                librariesToolbar
+                if !undescribed.isEmpty || !drafting.isEmpty { draftBanner }
+                filterBar
+                switch libraryLayout {
+                case .map: libraryMap
+                case .list: libraryList
+                }
             }
-            rulesCard
-            let groups = playbook.librariesByCategory
-            // A playbook with no categories yet reads by job, as it always has.
-            let flat = groups.count == 1 && groups[0].category.isEmpty
-            ForEach(groups, id: \.category) { group in
-                if !flat {
+        }
+    }
+
+    // MARK: Toolbar and filters
+
+    private var librariesToolbar: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search names, jobs and notes", text: $search).textFieldStyle(.plain)
+                if !search.isEmpty {
+                    Button("Clear", systemImage: "xmark.circle.fill") { search = "" }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Picker("Show as", selection: $libraryLayout) {
+                ForEach(LibraryLayout.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("Map shows the whole stack at a glance. List has every detail.")
+            Button("Add…", systemImage: "plus") { isAdding = true }
+                .buttonStyle(SoftButtonStyle())
+                .popover(isPresented: $isAdding, arrowEdge: .bottom) {
+                    addPanel.padding(14).frame(width: 440)
+                }
+            Button("Check…", systemImage: "stethoscope") { isShowingCheck = true }
+                .buttonStyle(SoftButtonStyle())
+                .popover(isPresented: $isShowingCheck, arrowEdge: .bottom) {
+                    healthCheckContent.padding(14).frame(width: 420)
+                }
+            if !LabCatalog.bundled.entries.isEmpty {
+                Button("Lab", systemImage: "flask") { openLab("compose") }
+                    .buttonStyle(SoftButtonStyle())
+                    .help("Open the Playbook lab: compose a screen and pick which library draws each part, before you verify them.")
+            }
+        }
+    }
+
+    /// Adding libraries by hand, and the ones the scan found in your projects.
+    private var addPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Add libraries").font(.body.weight(.medium))
+            Text("One per line: a name, a link, or \"Name – link\". Paste a whole list at once.").font(.caption).foregroundStyle(.secondary)
+            TextEditor(text: $addText)
+                .font(.system(.callout, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .frame(height: 64)
+                .padding(6)
+                .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+            HStack {
+                Spacer()
+                Button("Add") {
+                    addPasted()
+                    isAdding = false
+                }
+                .buttonStyle(GoldButtonStyle())
+                .disabled(addText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            if !suggestions.isEmpty {
+                Text("Already in your projects").font(.body.weight(.medium)).padding(.top, 6)
+                FlowLayout(spacing: 6) {
+                    ForEach(suggestions, id: \.name) { item in
+                        Button { addKnown(item.library) } label: {
+                            Label("\(item.name) · \(item.projects)", systemImage: "plus").font(.caption)
+                        }
+                        .buttonStyle(ChipStyle(isOn: false))
+                        .help("Used in \(item.projects) project\(item.projects == 1 ? "" : "s"). Add it to the playbook.")
+                    }
+                }
+            }
+        }
+    }
+
+    private var draftBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles").foregroundStyle(Palette.gold)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(drafting.isEmpty ? "\(undescribed.count) librar\(undescribed.count == 1 ? "y has" : "ies have") no details yet" : "Claude is researching \(drafting.count) librar\(drafting.count == 1 ? "y" : "ies")…")
+                    .font(.body.weight(.medium))
+                Text("Claude Code looks each one up on the web, using your plan, about 30 seconds for six. You check its drafts before AI tools rely on them.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            if drafting.isEmpty {
+                Button("Draft with Claude") { Task { await draft(undescribed) } }.buttonStyle(GoldButtonStyle())
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .modifier(RowCard())
+    }
+
+    /// Status chips, then category chips, then the rules for everywhere and the way into reviewing drafts.
+    private var filterBar: some View {
+        let all = playbook.libraries
+        let drafts = all.filter { !$0.verified && $0.isDescribed }.count
+        let statuses = LibraryStatus.allCases.filter { status in all.contains { LibraryFilter.status(status).matches($0) } }
+        return VStack(alignment: .leading, spacing: 8) {
+            FlowLayout(spacing: 6) {
+                filterChip("All", count: all.count, .all)
+                ForEach(statuses) { status in
+                    filterChip(status.title, count: all.filter { LibraryFilter.status(status).matches($0) }.count, .status(status))
+                }
+                filterChip("Drafts", count: all.filter { !$0.verified }.count, .drafts)
+            }
+            FlowLayout(spacing: 6) {
+                ForEach(playbook.outline, id: \.category) { group in
+                    let count = group.tasks.reduce(0) { $0 + $1.entries.count }
+                    let name = group.category.isEmpty ? "Not filed" : group.category
+                    Button("\(name) \(count)") { categoryFilter = categoryFilter == group.category ? nil : group.category }
+                        .font(.caption)
+                        .buttonStyle(ChipStyle(isOn: categoryFilter == group.category))
+                }
+            }
+            HStack(spacing: 10) {
+                rulesButton(for: "", label: "for everywhere")
+                Spacer(minLength: 8)
+                if drafts > 0 {
+                    Text("\(drafts) draft\(drafts == 1 ? "" : "s") to check").font(.caption).foregroundStyle(.secondary)
+                    Button("Review Drafts") { startReview() }
+                        .buttonStyle(SoftButtonStyle())
+                        .help("Step through Claude's drafts one at a time and verify each one")
+                }
+            }
+        }
+    }
+
+    private func filterChip(_ title: String, count: Int, _ filter: LibraryFilter) -> some View {
+        Button("\(title) \(count)") { statusFilter = statusFilter == filter && filter != .all ? .all : filter }
+            .font(.caption)
+            .buttonStyle(ChipStyle(isOn: statusFilter == filter))
+    }
+
+    /// "3 rules" for a category ("" for everywhere), opening them in a popover. Nothing when there are none.
+    @ViewBuilder
+    private func rulesButton(for category: String, label: String = "") -> some View {
+        let rules = playbook.rules(for: category)
+        if !rules.isEmpty {
+            Button {
+                shownRules = category
+            } label: {
+                Label("\(rules.count) rule\(rules.count == 1 ? "" : "s")\(label.isEmpty ? "" : " " + label)", systemImage: "list.bullet.rectangle")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .popover(isPresented: Binding(get: { shownRules == category }, set: { if !$0 { shownRules = nil } }), arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(category.isEmpty ? "Rules for everywhere" : "Rules for \(category)").font(.body.weight(.medium))
+                    ForEach(rules) { rule in
+                        Label(rule.text, systemImage: "list.bullet")
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    HStack {
+                        Spacer()
+                        Button("Edit in Rules") {
+                            shownRules = nil
+                            tab = .rules
+                        }
+                        .buttonStyle(SoftButtonStyle())
+                    }
+                }
+                .padding(14)
+                .frame(width: 380)
+            }
+        }
+    }
+
+    // MARK: What the filters leave
+
+    /// The outline with the search, status and category applied. A pair whose library is hidden
+    /// stands on its own.
+    private var visibleOutline: [OutlineGroup] {
+        let words = search.lowercased().split(separator: " ").map(String.init)
+        func passes(_ library: PlaybookLibrary) -> Bool {
+            guard statusFilter.matches(library) else { return false }
+            guard !words.isEmpty else { return true }
+            let text = [library.name, library.task, library.category, library.purpose, library.useWhen, library.avoidWhen,
+                        library.useInstead, library.notes, library.pairsWith, library.install].joined(separator: " ").lowercased()
+            return words.allSatisfy { text.contains($0) }
+        }
+        return playbook.outline.compactMap { group in
+            if let categoryFilter, categoryFilter != group.category { return nil }
+            let jobs = group.tasks.compactMap { job -> OutlineJob? in
+                var entries: [OutlineEntry] = []
+                var root: (id: UUID, shown: Bool)?
+                for (library, depth) in job.entries {
+                    if depth == 0 { root = (library.id, passes(library)) }
+                    guard passes(library) else { continue }
+                    let underRoot = depth > 0 && root?.shown == true
+                    entries.append(OutlineEntry(library: library, depth: underRoot ? depth : 0, root: underRoot ? root!.id : library.id))
+                }
+                return entries.isEmpty ? nil : OutlineJob(task: job.task, entries: entries)
+            }
+            return jobs.isEmpty ? nil : OutlineGroup(category: group.category, jobs: jobs)
+        }
+    }
+
+    @ViewBuilder
+    private var nothingMatches: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("No libraries match.").font(.callout).foregroundStyle(.secondary)
+            Button("Show All") {
+                search = ""
+                statusFilter = .all
+                categoryFilter = nil
+            }
+            .buttonStyle(SoftButtonStyle())
+        }
+        .padding(.top, 6)
+    }
+
+    // MARK: Map
+
+    /// The whole stack at a glance: a card per category, a line per job with its pick, the
+    /// libraries that pair with it after a +, and what to avoid struck through at the bottom.
+    private var libraryMap: some View {
+        let groups = visibleOutline
+        return Group {
+            if groups.isEmpty {
+                nothingMatches
+            } else {
+                // Two columns, each card going to the shorter one, so a long card leaves no gap beside it.
+                let columns = groups.reduce(into: (left: [OutlineGroup](), right: [OutlineGroup](), leftLines: 0, rightLines: 0)) { result, group in
+                    let lines = group.jobs.count + group.jobs.flatMap(\.entries).filter(\.library.isAvoided).count + 2
+                    if result.leftLines <= result.rightLines {
+                        result.left.append(group)
+                        result.leftLines += lines
+                    } else {
+                        result.right.append(group)
+                        result.rightLines += lines
+                    }
+                }
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(spacing: 10) { ForEach(columns.left) { mapCard($0) } }.frame(maxWidth: .infinity, alignment: .top)
+                    VStack(spacing: 10) { ForEach(columns.right) { mapCard($0) } }.frame(maxWidth: .infinity, alignment: .top)
+                }
+            }
+        }
+    }
+
+    private func mapCard(_ group: OutlineGroup) -> some View {
+        let avoided = group.jobs.flatMap(\.entries).map(\.library).filter(\.isAvoided)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Button(group.category.isEmpty ? "Not filed yet" : group.category) {
+                    categoryFilter = group.category
+                    libraryLayout = .list
+                }
+                .buttonStyle(.plain)
+                .font(.body.weight(.semibold))
+                .help("Show \(group.category.isEmpty ? "these" : group.category) as a list")
+                Text("\(group.jobs.reduce(0) { $0 + $1.entries.count })").font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 6)
+                rulesButton(for: group.category)
+            }
+            ForEach(group.jobs) { job in
+                let lines = mapLines(job.entries.filter { !$0.library.isAvoided })
+                if !lines.isEmpty {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(job.task.isEmpty ? "Other" : job.task)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 104, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(lines, id: \.lead.id) { line in
+                                FlowLayout(spacing: 4) {
+                                    mapName(line.lead)
+                                    if let status = line.lead.status, status != .default {
+                                        Text(status.title.lowercased()).font(.caption2.weight(.semibold)).foregroundStyle(statusColor(status))
+                                    }
+                                    ForEach(line.pairs) { pair in
+                                        Text("+").font(.caption).foregroundStyle(.secondary)
+                                        mapName(pair, leads: false)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !avoided.isEmpty {
+                Rectangle().fill(Palette.hairline).frame(height: 1).padding(.vertical, 2)
+                ForEach(avoided) { library in
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Button { open(library) } label: { Text(library.name).strikethrough() }
+                            .buttonStyle(.plain)
+                            .font(.caption)
+                            .foregroundStyle(Palette.coral)
+                        if !library.useInstead.isEmpty {
+                            Text("→ \(library.useInstead)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                    .help(library.avoidWhen.isEmpty ? LibraryStatus.avoid.meaning : library.avoidWhen)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(RowCard())
+    }
+
+    /// A job's libraries as lines: each one that leads, with its pairs after it.
+    private func mapLines(_ entries: [OutlineEntry]) -> [(lead: PlaybookLibrary, pairs: [PlaybookLibrary])] {
+        var lines: [(lead: PlaybookLibrary, pairs: [PlaybookLibrary])] = []
+        for entry in entries {
+            if entry.depth > 0, let last = lines.indices.last, lines[last].lead.id == entry.root {
+                lines[last].pairs.append(entry.library)
+            } else {
+                lines.append((entry.library, []))
+            }
+        }
+        return lines
+    }
+
+    /// A library's name on the map, bold when it's the pick. One that pairs with another stays light.
+    private func mapName(_ library: PlaybookLibrary, leads: Bool = true) -> some View {
+        let isPick = leads && library.status == .default
+        return Button { open(library) } label: {
+            HStack(spacing: 3) {
+                Text(library.name)
+                if library.verified { Image(systemName: "checkmark.seal.fill").font(.caption2).foregroundStyle(Palette.jade) }
+            }
+        }
+        .buttonStyle(.plain)
+        .font(.callout.weight(isPick ? .semibold : .regular))
+        .foregroundStyle(isPick ? .primary : .secondary)
+        .help(library.useWhen.isEmpty ? library.purpose : library.useWhen)
+    }
+
+    /// Shows one library's details in the list.
+    private func open(_ library: PlaybookLibrary) {
+        libraryLayout = .list
+        expanded = library.id
+        scrollTarget = library.id
+    }
+
+    // MARK: List
+
+    /// One short row per library, under its category. A row opens into the full card.
+    private var libraryList: some View {
+        let groups = visibleOutline
+        return VStack(alignment: .leading, spacing: 6) {
+            if groups.isEmpty { nothingMatches }
+            ForEach(groups) { group in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(group.category.isEmpty ? "Not filed yet" : group.category)
                         .font(.caption.weight(.semibold))
                         .tracking(0.8)
                         .textCase(.uppercase)
                         .foregroundStyle(Palette.gold.opacity(0.85))
-                        .padding(.top, 10)
-                    if !group.category.isEmpty {
-                        ForEach(playbook.rules(for: group.category)) { rule in
-                            Label(rule.text, systemImage: "list.bullet")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                    Text("\(group.jobs.reduce(0) { $0 + $1.entries.count })").font(.caption).foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    rulesButton(for: group.category)
+                }
+                .padding(.top, 8)
+                VStack(alignment: .leading, spacing: 0) {
+                    let entries = group.jobs.flatMap(\.entries)
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        if index > 0 { Rectangle().fill(Palette.hairline).frame(height: 1) }
+                        Group {
+                            if expanded == entry.id {
+                                libraryCard(entry.library, collapsible: true)
+                                    .padding(6)
+                            } else {
+                                libraryRow(entry)
+                            }
                         }
+                        .padding(.leading, CGFloat(entry.depth) * 18)
+                        .id(entry.id)
                     }
                 }
-                ForEach(group.tasks, id: \.task) { job in
-                    jobHeading(job.task.isEmpty ? "No task yet" : job.task, flat: flat)
-                    ForEach(job.libraries) { libraryCard($0) }
-                }
+                .cardSurface()
             }
         }
+    }
+
+    private func libraryRow(_ entry: OutlineEntry) -> some View {
+        let library = entry.library
+        let summary: String = {
+            if library.isAvoided || library.status == .legacy, !library.useInstead.isEmpty { return "Use \(library.useInstead) instead" }
+            let when = library.useWhen.isEmpty ? library.purpose : library.useWhen
+            return when.components(separatedBy: ". ").first ?? when
+        }()
+        return Button {
+            expanded = library.id
+            editing = nil
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                HStack(spacing: 4) {
+                    if entry.depth > 0 { Text("↳").foregroundStyle(.tertiary) }
+                    Text(library.name).fontWeight(.semibold).lineLimit(1)
+                    if library.verified { Image(systemName: "checkmark.seal.fill").font(.caption2).foregroundStyle(Palette.jade) }
+                }
+                .frame(width: max(120, 190 - CGFloat(entry.depth) * 18), alignment: .leading)
+                statusLabel(library).frame(width: 66, alignment: .leading)
+                Text(library.task.isEmpty ? "—" : library.task)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(width: 128, alignment: .leading)
+                Text(summary)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.tertiary)
+            }
+            .font(.callout)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+            .background(hoveredRow == library.id ? Color.white.opacity(0.04) : .clear)
+        }
+        .buttonStyle(.plain)
+        .onHover { hoveredRow = $0 ? library.id : (hoveredRow == library.id ? nil : hoveredRow) }
+        .help(library.purpose)
     }
 
     @ViewBuilder
-    private func jobHeading(_ title: String, flat: Bool) -> some View {
-        if flat {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .tracking(0.8)
-                .textCase(.uppercase)
-                .foregroundStyle(Palette.gold.opacity(0.85))
-                .padding(.top, 6)
+    private func statusLabel(_ library: PlaybookLibrary) -> some View {
+        if library.isAvoided {
+            Text("Avoid").font(.caption.weight(.semibold)).foregroundStyle(Palette.coral)
+        } else if let status = library.status {
+            Text(status.title).font(.caption.weight(.semibold)).foregroundStyle(statusColor(status))
         } else {
-            Text(title).font(.callout.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 2)
+            Text("Not set").font(.caption).foregroundStyle(.tertiary)
         }
     }
 
-    /// Rules that aren't about one library, each for everywhere or one category.
-    private var rulesCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "list.bullet.rectangle").foregroundStyle(Palette.gold)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Rules").font(.body.weight(.medium))
-                    Text("What AI tools should follow beyond any one library, such as \"One primitive system per app\". File a rule under a category to show it there, or leave it for everywhere.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+    // MARK: Reviewing drafts
+
+    /// Claude's drafts in reading order, skipping ones with nothing to check yet.
+    private func startReview() {
+        let order = playbook.outline.flatMap(\.tasks).flatMap(\.entries).map(\.library)
+        reviewQueue = order.filter { !$0.verified && $0.isDescribed }.map(\.id)
+        reviewIndex = 0
+        reviewVerified = 0
+        editing = nil
+        message = nil
+    }
+
+    private func nextDraft() {
+        editing = nil
+        if reviewIndex + 1 < reviewQueue.count {
+            reviewIndex += 1
+        } else {
+            endReview()
+        }
+    }
+
+    private func endReview() {
+        if !reviewQueue.isEmpty {
+            message = "Verified \(reviewVerified) of \(reviewQueue.count) draft\(reviewQueue.count == 1 ? "" : "s")."
+        }
+        reviewQueue = []
+        reviewIndex = 0
+        editing = nil
+    }
+
+    private var reviewPanel: some View {
+        let id = reviewQueue.indices.contains(reviewIndex) ? reviewQueue[reviewIndex] : nil
+        let current = id.flatMap { id in playbook.libraries.first { $0.id == id } }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "checkmark.seal").foregroundStyle(Palette.gold)
+                Text("Reviewing drafts").font(.body.weight(.medium))
+                Text("\(reviewIndex + 1) of \(reviewQueue.count)").font(.callout).foregroundStyle(.secondary).monospacedDigit()
                 Spacer(minLength: 8)
-                Button("Add Rule") { edit { $0.rules.append(PlaybookRule(text: "")) } }
+                Button("Stop") { endReview() }
                     .buttonStyle(SoftButtonStyle())
+                    .keyboardShortcut(.cancelAction)
             }
-            ForEach(playbook.rules) { rule in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    TextField("A rule AI tools should follow", text: Binding(
-                        get: { playbook.rules.first { $0.id == rule.id }?.text ?? "" },
-                        set: { value in updateRule(rule.id) { $0.text = value } }
-                    ), axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...3)
-                    Picker("Category", selection: Binding(
-                        get: { PlaybookCategories.canonical(playbook.rules.first { $0.id == rule.id }?.category ?? "") },
-                        set: { value in updateRule(rule.id) { $0.category = value } }
-                    )) {
-                        Text("Everywhere").tag("")
-                        ForEach(categoryChoices(including: rule.category), id: \.self) { Text($0).tag($0) }
+            ProgressView(value: Double(reviewIndex), total: Double(max(reviewQueue.count, 1)))
+                .tint(Palette.gold)
+            Text("Check its link, install command and health against the library's own docs, and edit what's wrong. ⌘↩ verifies and moves on, ⌘→ skips.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let current {
+                let filed = [current.category, current.task].filter { !$0.isEmpty }.joined(separator: " › ")
+                if !filed.isEmpty { Text(filed).font(.caption).foregroundStyle(.secondary) }
+                libraryCard(current, showsVerify: false)
+                HStack {
+                    Button("Back") {
+                        editing = nil
+                        reviewIndex -= 1
                     }
-                    .labelsHidden()
-                    .frame(width: 190)
-                    Button("Remove", systemImage: "trash") { edit { $0.rules.removeAll { $0.id == rule.id } } }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("Remove this rule")
+                    .buttonStyle(SoftButtonStyle())
+                    .disabled(reviewIndex == 0)
+                    Spacer()
+                    Button("Skip") { nextDraft() }
+                        .buttonStyle(SoftButtonStyle())
+                        .keyboardShortcut(.rightArrow, modifiers: .command)
+                    Button(current.verified ? "Verified, Next" : "Verify and Next") {
+                        if !current.verified {
+                            update(current.id) { $0.verified = true }
+                            reviewVerified += 1
+                        }
+                        nextDraft()
+                    }
+                    .buttonStyle(GoldButtonStyle())
+                    .keyboardShortcut(.return, modifiers: .command)
                 }
-                .padding(.leading, 26)
+            } else {
+                Text("This draft was removed.").font(.callout).foregroundStyle(.secondary)
+                Button("Next") { nextDraft() }.buttonStyle(SoftButtonStyle())
             }
         }
         .modifier(RowCard())
+    }
+
+    // MARK: - Rules
+
+    /// Rules that aren't about one library, grouped by where they apply.
+    private var rulesTab: some View {
+        let categories = [""] + PlaybookCategories.sorted(playbook.rules.map { PlaybookCategories.canonical($0.category) }).filter { !$0.isEmpty }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(playbook.rules.isEmpty ? "No rules yet." : "\(playbook.rules.count) rule\(playbook.rules.count == 1 ? "" : "s")")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Menu("Add Rule") {
+                    Button("For Everywhere") { addRule(in: "") }
+                    Divider()
+                    ForEach(PlaybookCategories.names, id: \.self) { name in
+                        Button("For \(name)") { addRule(in: name) }
+                    }
+                }
+                .menuStyle(.button)
+                .fixedSize()
+            }
+            ForEach(categories, id: \.self) { category in
+                let rules = playbook.rules.filter { PlaybookCategories.canonical($0.category) == category }
+                if !rules.isEmpty || category.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(category.isEmpty ? "Everywhere" : category)
+                                .font(.caption.weight(.semibold))
+                                .tracking(0.8)
+                                .textCase(.uppercase)
+                                .foregroundStyle(Palette.gold.opacity(0.85))
+                            if !category.isEmpty {
+                                Text(PlaybookCategories.all.first { $0.name == category }?.covers ?? "").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        if rules.isEmpty {
+                            Text("Rules here apply to all work, such as \"One library per job\".").font(.caption).foregroundStyle(.secondary)
+                        }
+                        ForEach(rules) { ruleRow($0) }
+                    }
+                    .modifier(RowCard())
+                }
+            }
+        }
+    }
+
+    private func addRule(in category: String) {
+        edit { $0.rules.append(PlaybookRule(text: "", category: category)) }
+    }
+
+    private func ruleRow(_ rule: PlaybookRule) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            TextField("A rule AI tools should follow", text: Binding(
+                get: { playbook.rules.first { $0.id == rule.id }?.text ?? "" },
+                set: { value in updateRule(rule.id) { $0.text = value } }
+            ), axis: .vertical)
+            .textFieldStyle(.roundedBorder)
+            .lineLimit(1...6)
+            Picker("Category", selection: Binding(
+                get: { PlaybookCategories.canonical(playbook.rules.first { $0.id == rule.id }?.category ?? "") },
+                set: { value in updateRule(rule.id) { $0.category = value } }
+            )) {
+                Text("Everywhere").tag("")
+                ForEach(categoryChoices(including: rule.category), id: \.self) { Text($0).tag($0) }
+            }
+            .labelsHidden()
+            .frame(width: 196)
+            .help("Move it to another category")
+            Button("Remove", systemImage: "trash") { edit { $0.rules.removeAll { $0.id == rule.id } } }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Remove this rule")
+        }
     }
 
     /// The known categories, plus one of the owner's own when it's in use.
     private func categoryChoices(including current: String) -> [String] {
         let own = PlaybookCategories.canonical(current)
         return PlaybookCategories.names + (own.isEmpty || PlaybookCategories.names.contains(own) ? [] : [own])
+    }
+
+    /// Other libraries this one can pair with, plus what it names now if that isn't one of them.
+    private func pairingChoices(for id: UUID) -> [String] {
+        let names = playbook.libraries.filter { $0.id != id && !$0.isAvoided }.map(\.name)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        let current = playbook.libraries.first { $0.id == id }?.pairsWith ?? ""
+        return names + (current.isEmpty || names.contains(current) ? [] : [current])
     }
 
     private var undescribed: [PlaybookLibrary] { playbook.libraries.filter { !$0.isDescribed && !$0.verified } }
@@ -323,7 +823,7 @@ struct PlaybookView: View {
     }
 
     /// Re-researching every library, now or once a month. Changes land in the chat to apply.
-    private var healthCheckCard: some View {
+    private var healthCheckContent: some View {
         @Bindable var model = model
         let batches = Int(ceil(Double(playbook.libraries.count) / Double(PlaybookResearch.batchSize)))
         return VStack(alignment: .leading, spacing: 8) {
@@ -344,6 +844,7 @@ struct PlaybookView: View {
                     ProgressView().controlSize(.small)
                 } else {
                     Button("Check Now") {
+                        isShowingCheck = false
                         Task {
                             saveTask?.cancel()
                             save()
@@ -360,26 +861,6 @@ struct PlaybookView: View {
                 .font(.caption)
                 .padding(.leading, 26)
         }
-        .modifier(RowCard())
-    }
-
-    /// The Playbook lab: a composer where the libraries can be tried together, before you verify them.
-    private var labCard: some View {
-        let covered = playbook.libraries.filter { LabCatalog.bundled.route(for: $0.name) != nil }.count
-        return HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "flask").foregroundStyle(Palette.gold)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Playbook lab").font(.body.weight(.medium))
-                Text("Compose a screen from components and pick which library draws each one, on a React canvas or a native SwiftUI one. \(covered) of these libraries can go on the React canvas, and Try It opens a card's library there. The lab ships with Graphitree, so nothing loads from the web.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            Button("Open Lab") { openLab("compose") }
-                .buttonStyle(SoftButtonStyle())
-        }
-        .modifier(RowCard())
     }
 
     private func openLab(_ route: String) {
@@ -387,9 +868,20 @@ struct PlaybookView: View {
         openWindow(id: "lab")
     }
 
-    private func libraryCard(_ library: PlaybookLibrary) -> some View {
+    /// A library's full details and actions. In the list it folds back into its row.
+    private func libraryCard(_ library: PlaybookLibrary, collapsible: Bool = false, showsVerify: Bool = true) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if collapsible {
+                    Button("Fold", systemImage: "chevron.up") {
+                        expanded = nil
+                        editing = nil
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Fold back into its row")
+                }
                 Text(library.name).font(.body.weight(.semibold))
                 badge(library)
                 Spacer(minLength: 8)
@@ -401,10 +893,12 @@ struct PlaybookView: View {
                             .buttonStyle(SoftButtonStyle())
                             .help("Open \(library.name) in the Playbook lab")
                     }
-                    Button(library.verified ? "Unverify" : "Verify") { update(library.id) { $0.verified.toggle() } }
-                        .buttonStyle(SoftButtonStyle())
-                        .disabled(!library.isDescribed)
-                        .help(library.verified ? "Mark it as a draft again" : "You've checked these details. AI tools can rely on them.")
+                    if showsVerify {
+                        Button(library.verified ? "Unverify" : "Verify") { update(library.id) { $0.verified.toggle() } }
+                            .buttonStyle(SoftButtonStyle())
+                            .disabled(!library.isDescribed)
+                            .help(library.verified ? "Mark it as a draft again" : "You've checked these details. AI tools can rely on them.")
+                    }
                     Button(editing == library.id ? "Done" : "Edit") { editing = editing == library.id ? nil : library.id }
                         .buttonStyle(SoftButtonStyle())
                     Button("Remove", systemImage: "trash") { pendingRemoval = library.id }
@@ -424,6 +918,13 @@ struct PlaybookView: View {
                 if !library.useWhen.isEmpty { fact("Use when", library.useWhen) }
                 if !library.avoidWhen.isEmpty { fact("Avoid when", library.avoidWhen) }
                 if !library.useInstead.isEmpty { fact("Use instead", library.useInstead) }
+                if let partner = playbook.partner(of: library) {
+                    fact("Pairs with", partner.name)
+                } else if !library.pairsWith.isEmpty {
+                    fact("Pairs with", "\(library.pairsWith), which isn't in the playbook")
+                }
+                let pairs = playbook.companions(of: library)
+                if !pairs.isEmpty { fact("Pairs with it", pairs.map(\.name).joined(separator: ", ")) }
                 if !library.install.isEmpty {
                     HStack(spacing: 6) {
                         Text(library.install).font(.caption.monospaced()).textSelection(.enabled)
@@ -431,8 +932,10 @@ struct PlaybookView: View {
                     }
                 }
                 if !library.health.isEmpty {
-                    let checked = library.checkedOn.map { " Checked \($0.formatted(date: .abbreviated, time: .omitted))." } ?? ""
-                    Label(library.health + checked, systemImage: library.looksAbandoned ? "exclamationmark.triangle.fill" : "heart.text.square")
+                    let note = library.health.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let stop = note.last.map { ".!?".contains($0) } ?? true ? "" : "."
+                    let checked = library.checkedOn.map { "\(stop) Checked \($0.formatted(date: .abbreviated, time: .omitted))." } ?? ""
+                    Label(note + checked, systemImage: library.looksAbandoned ? "exclamationmark.triangle.fill" : "heart.text.square")
                         .font(.caption)
                         .foregroundStyle(library.looksAbandoned ? Palette.coral : .secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -504,6 +1007,19 @@ struct PlaybookView: View {
                 .frame(maxWidth: 260, alignment: .leading)
             }
             field("Task", \.task, id, placeholder: "Toasts, Drawers, UI components…")
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("Pairs with").font(.callout).frame(width: 96, alignment: .leading)
+                Picker("Pairs with", selection: Binding(
+                    get: { playbook.libraries.first { $0.id == id }?.pairsWith ?? "" },
+                    set: { value in update(id) { $0.pairsWith = value } }
+                )) {
+                    Text("Nothing: it has a job of its own").tag("")
+                    ForEach(pairingChoices(for: id), id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 360, alignment: .leading)
+                .help("A plugin, binding or helper for another library is listed under it instead of as a job of its own")
+            }
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text("Status").font(.callout).frame(width: 96, alignment: .leading)
                 Picker("Status", selection: Binding(
@@ -941,6 +1457,12 @@ struct PlaybookView: View {
         addsToGraph = model.playbookAddsToGraph
         isLoaded = true
         if let raw = UserDefaults.standard.string(forKey: "playbookTab"), let start = PlaybookTab(rawValue: raw) { tab = start }
+        // GraphitreeShots opens a library's card, or starts a review, with these.
+        if let name = UserDefaults.standard.string(forKey: "playbookOpen"), let library = playbook.libraries.first(where: { $0.name == name }) {
+            libraryLayout = .list
+            expanded = library.id
+        }
+        if UserDefaults.standard.bool(forKey: "playbookReview") { startReview() }
         await runScan()
     }
 
@@ -1135,13 +1657,14 @@ struct PlaybookView: View {
 }
 
 private enum PlaybookTab: String, CaseIterable, Identifiable {
-    case chat, libraries, stack, habits, storage
+    case chat, libraries, rules, stack, habits, storage
 
     var id: String { rawValue }
     var title: String {
         switch self {
         case .chat: return "Chat"
         case .libraries: return "Libraries"
+        case .rules: return "Rules"
         case .stack: return "Stack"
         case .habits: return "How You Work"
         case .storage: return "Storage"
@@ -1150,12 +1673,60 @@ private enum PlaybookTab: String, CaseIterable, Identifiable {
     var intro: String {
         switch self {
         case .chat: return "Ask about libraries, your stack or how you work."
-        case .libraries: return "Libraries you trust, filed by area and the job they do, each with where it stands for new work. AI tools use these instead of writing their own toast, drawer or command menu."
+        case .libraries: return "Libraries you trust, filed by area and the job they do. AI tools use these instead of writing their own toast, drawer or command menu. Map shows the whole stack at a glance; List has every detail."
+        case .rules: return "What AI tools should follow beyond any one library, such as \"One primitive system per app\". A rule filed under a category shows with that category's libraries."
         case .stack: return "What new work should start from. Pick your defaults; existing projects keep what they use."
         case .habits: return "How you like to work, written once so every AI tool knows it. Like memory, but yours to edit. The Chat tab can also learn it from your recent sessions."
         case .storage: return "The playbook lives next to the guide, and a copy goes into the knowledge graph. Keep it on this Mac, or back it up to a private repo."
         }
     }
+}
+
+/// How the Libraries tab shows them.
+private enum LibraryLayout: String, CaseIterable, Identifiable {
+    case map, list
+
+    var id: String { rawValue }
+    var title: String { self == .map ? "Map" : "List" }
+}
+
+/// Which libraries the Libraries tab shows.
+private enum LibraryFilter: Hashable {
+    case all
+    case status(LibraryStatus)
+    /// Not verified yet.
+    case drafts
+
+    func matches(_ library: PlaybookLibrary) -> Bool {
+        switch self {
+        case .all: return true
+        case .status(.avoid): return library.isAvoided
+        case .status(let status): return !library.isAvoided && library.status == status
+        case .drafts: return !library.verified
+        }
+    }
+}
+
+/// A library as the Libraries tab places it: under its job, or under the library it pairs with.
+private struct OutlineEntry: Identifiable {
+    let library: PlaybookLibrary
+    /// 0 for a library with a line of its own, 1 and deeper for ones that pair with it.
+    let depth: Int
+    /// The library at depth 0 it sits under, or its own id.
+    let root: UUID
+    var id: UUID { library.id }
+}
+
+private struct OutlineJob: Identifiable {
+    let task: String
+    let entries: [OutlineEntry]
+    var id: String { task }
+}
+
+private struct OutlineGroup: Identifiable {
+    let category: String
+    let jobs: [OutlineJob]
+    var id: String { category }
 }
 
 /// A rounded chip that's gold when chosen.

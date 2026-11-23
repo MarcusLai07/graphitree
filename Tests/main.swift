@@ -1142,6 +1142,52 @@ check(PlaybookPicks.answer("framer", in: filed).contains("Use what it names inst
 let radixPick = PlaybookPicks.describe(filed.libraries[3])
 check(radixPick.contains("keep where it's already used, not for new work") && radixPick.contains("Use instead: Base UI"), "a legacy pick says so and names the replacement")
 
+// Libraries that pair with another: listed under it, not as a job of their own.
+var paired = Playbook()
+paired.libraries = [
+    PlaybookLibrary(name: "Inkdown", task: "Markdown", purpose: "Renders markdown.", verified: true, status: .default, category: "Content and documents"),
+    PlaybookLibrary(name: "ink-tables", task: "Markdown", purpose: "Tables for Inkdown.", verified: true, status: .narrow, category: "Content and documents", pairsWith: "inkdown"),
+    PlaybookLibrary(name: "OldMark", task: "Markdown", purpose: "Old.", verified: true, status: .avoid, category: "Content and documents", useInstead: "Inkdown"),
+    PlaybookLibrary(name: "Mapleaf", task: "Maps", purpose: "Maps.", verified: true, status: .default, category: "Charts and maps"),
+    PlaybookLibrary(name: "react-mapleaf", task: "Maps in React", purpose: "Mapleaf in React.", status: .default, category: "Charts and maps", pairsWith: "Mapleaf"),
+    PlaybookLibrary(name: "mapleaf-pins", task: "Map pins", purpose: "Pins.", verified: true, category: "Charts and maps", pairsWith: "react-mapleaf"),
+    PlaybookLibrary(name: "Loop A", task: "Loops", purpose: "A.", verified: true, category: "Charts and maps", pairsWith: "Loop B"),
+    PlaybookLibrary(name: "Loop B", task: "Loops", purpose: "B.", verified: true, category: "Charts and maps", pairsWith: "Loop A"),
+    PlaybookLibrary(name: "Stray", task: "Odds", purpose: "Odd.", verified: true, category: "Charts and maps", pairsWith: "Not here"),
+    PlaybookLibrary(name: "OldMark plugin", task: "Markdown", purpose: "For OldMark.", verified: true, category: "Content and documents", pairsWith: "OldMark"),
+]
+expectEqual(paired.partner(of: paired.libraries[1])?.name, "Inkdown", "a pairing matches its library's name in any case")
+expectEqual(paired.partner(of: paired.libraries[5])?.name, "react-mapleaf", "a pairing can sit under another pairing")
+check(paired.partner(of: paired.libraries[6]) == nil && paired.partner(of: paired.libraries[7]) == nil, "two libraries pairing with each other both stand on their own")
+check(paired.partner(of: paired.libraries[8]) == nil, "a pairing with a library that isn't in the playbook stands on its own")
+check(paired.partner(of: paired.libraries[9]) == nil, "nothing pairs with a library to avoid")
+expectEqual(paired.companionTree(of: paired.libraries[3]).map { "\($0.library.name) \($0.depth)" }, ["react-mapleaf 1", "mapleaf-pins 2"], "a library's pairs come in order, deeper ones after their own")
+expectEqual(paired.leadsByCategory.flatMap(\.tasks).map(\.task), ["Loops", "Maps", "Odds", "Markdown"], "a job holding only pairs disappears")
+expectEqual(paired.outline.last?.tasks.first?.entries.map(\.library.name), ["Inkdown", "ink-tables", "OldMark plugin", "OldMark"], "the outline puts each pair after its library, and what to avoid last")
+let pairedText = PlaybookFile.markdown(paired)
+check(pairedText.contains("A library listed under another one *pairs with* it"), "with pairings, the rules for AI tools explain them")
+check(pairedText.contains("- **Inkdown** *default*\n  Renders markdown.\n  - **ink-tables** *narrow*\n    Pairs with: Inkdown.\n    Tables for Inkdown.\n"), "a pair is nested under its library and says so")
+check(pairedText.contains("  - **react-mapleaf** *default, draft*\n    Pairs with: Mapleaf. Job: Maps in React.\n") && pairedText.contains("    - **mapleaf-pins**\n      Pairs with: react-mapleaf. Job: Map pins.\n"), "a pair in another job names it, and nests as deep as it pairs")
+check(!pairedText.contains("#### Maps in React") && !pairedText.contains("#### Map pins"), "jobs holding only pairs get no heading")
+check(pairedText.contains("#### Odds\n\n- **Stray**"), "a library whose pairing isn't in the playbook keeps its job")
+let pairedGuide = PlaybookFile.guideSummary(paired).joined(separator: "\n")
+check(pairedGuide.contains("- Markdown: Inkdown + ink-tables, OldMark plugin; avoid OldMark (use Inkdown) for new work"), "the guide lists pairs after their library")
+check(pairedGuide.contains("- Maps: Mapleaf + react-mapleaf + mapleaf-pins") && !pairedGuide.contains("- Maps in React"), "the guide has no job line for pairs")
+let inkPick = PlaybookPicks.describe(paired.libraries[1], in: paired)
+check(inkPick.contains("Pairs with: Inkdown. Use them together."), "a pick says what it pairs with")
+check(PlaybookPicks.describe(paired.libraries[0], in: paired).contains("Pairs with it: ink-tables"), "a pick names what pairs with it")
+check(PlaybookPicks.answer("markdown", in: paired).contains("Pairs with it: ink-tables"), "a pick answer carries its pairs")
+let pairedFolder = FileManager.default.temporaryDirectory.appendingPathComponent("graphitree-paired-\(UUID().uuidString)")
+try PlaybookFile.save(paired, to: pairedFolder)
+expectEqual(PlaybookFile.load(from: pairedFolder).libraries.map(\.pairsWith), paired.libraries.map(\.pairsWith), "pairings survive a reload")
+try? FileManager.default.removeItem(at: pairedFolder)
+let noPairing = try oddDecoder.decode(Playbook.self, from: Data(#"{"libraries":[{"name":"X","pairsWith":7}]}"#.utf8))
+expectEqual(noPairing.libraries.first?.pairsWith, "", "a pairing that can't be read is empty")
+let draftPair = { (pair: String) in LibraryDraft(name: "ink-tables", url: "", task: "", purpose: "", useWhen: "", avoidWhen: "", install: "", platforms: "", health: "", pairsWith: pair) }
+expectEqual(PlaybookResearch.applying(draftPair("Inkdown"), to: PlaybookLibrary(name: "ink-tables")).pairsWith, "Inkdown", "the chat can pair a library")
+expectEqual(PlaybookResearch.applying(draftPair(""), to: paired.libraries[1]).pairsWith, "inkdown", "an empty pairing keeps what's there")
+expectEqual(PlaybookResearch.applying(draftPair("None"), to: paired.libraries[1]).pairsWith, "", "none unpairs it")
+
 let bookFolder = FileManager.default.temporaryDirectory.appendingPathComponent("graphitree-playbook-\(UUID().uuidString)")
 try PlaybookFile.save(book, to: bookFolder, now: Date(timeIntervalSince1970: 1_800_000_000))
 let reloaded = PlaybookFile.load(from: bookFolder)
@@ -1484,6 +1530,15 @@ expectEqual(PlaybookChat.label(removeRule), "Remove rule: Sonner is the only toa
 let keepFiling = PlaybookChange(kind: .library, library: LibraryDraft(name: "sonner", url: "", task: "", purpose: "", useWhen: "", avoidWhen: "", install: "", platforms: "", health: "Maintained, 2027.", status: "", category: "", useInstead: ""))
 let refiled = PlaybookChat.applying(keepFiling, to: filedChat).libraries.first { $0.name == "Sonner" }
 check(refiled?.status == .default && refiled?.category == "Interaction" && refiled?.checkedOn != nil, "an empty status or category keeps what's there, and a new health note is dated")
+check(PlaybookChat.schema.contains(#""pairsWith""#) && chatInstructions.contains("pairsWith is the exact name of another library"), "the model can pair libraries and is told how")
+check(PlaybookChat.playbookText(paired).contains("- ink-tables (Content and documents › Markdown) [verified, narrow]: Tables for Inkdown. Pairs with: inkdown."), "the model sees what each library pairs with")
+let pairReply = PlaybookChat.reply(from: [
+    "reply": "Paired.",
+    "libraries": [["name": "OldMark plugin", "url": "", "task": "", "purpose": "", "useWhen": "", "avoidWhen": "", "install": "", "platforms": "", "health": "", "status": "", "category": "", "useInstead": "", "pairsWith": "Inkdown", "reason": "r"]],
+    "stack": [], "habits": [], "rules": [],
+])
+let repaired = pairReply.changes.reduce(paired) { PlaybookChat.applying($1, to: $0) }
+expectEqual(repaired.partner(of: repaired.libraries[9])?.name, "Inkdown", "a pairing from the chat moves the library under its new partner")
 let olderChat = #"[{"id":"9C1A3E39-0F59-4C8B-9D5B-7E8E2B9D0A11","role":"assistant","text":"Old","changes":[{"id":"0B7A1C2D-3E4F-4A5B-8C6D-7E8F9A0B1C2D","kind":"library","reason":"","library":{"name":"A","url":"","task":"","purpose":"","useWhen":"","avoidWhen":"","install":"","platforms":"","health":""},"choices":[],"notes":"","text":"","state":"applied"}],"at":"2026-01-01T00:00:00Z","isError":false}]"#
 let chatDecoder = JSONDecoder()
 chatDecoder.dateDecodingStrategy = .iso8601
