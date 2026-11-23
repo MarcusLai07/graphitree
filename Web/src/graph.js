@@ -218,6 +218,31 @@ const renderer = new Sigma(graph, container, {
   },
 });
 
+// MARK: Screen scale. Sigma reads the pixel ratio on every resize, but only resizes its canvas when
+// the page's size changes. A change of ratio on its own, such as the window moving to a screen with
+// another scale or the web view starting before it's on a Retina screen, then draws every node,
+// line and label twice as big from the bottom-left corner, with the glows left where the nodes belong.
+
+const stageCanvas = container.querySelector("canvas");
+
+renderer.on("beforeRender", () => {
+  const { width, height } = renderer.getDimensions();
+  const ratio = window.devicePixelRatio || 1;
+  // A canvas is whole pixels: sigma's fractional sizes are cut down.
+  if (stageCanvas && (stageCanvas.width !== Math.floor(width * ratio) || stageCanvas.height !== Math.floor(height * ratio))) {
+    renderer.resize(true);
+  }
+});
+
+// Nothing else redraws when only the scale changes.
+function watchPixelRatio() {
+  matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`).addEventListener("change", () => {
+    renderer.scheduleRender();
+    watchPixelRatio();
+  }, { once: true });
+}
+watchPixelRatio();
+
 // MARK: Focus. Hover wins over selection, and selection wins over an isolated legend group.
 
 let activeNodes = new Set();
@@ -672,6 +697,12 @@ function circleLayout() {
   return positions;
 }
 
+// Ring two: the gap between children on one arc, and the room each gets in a crowded wedge.
+const CHILD_SPACING = 7;
+const CHILD_AREA = CHILD_SPACING * CHILD_SPACING * 2.5;
+// The golden ratio's fraction, which spreads any count of steps evenly across a range.
+const GOLDEN_FRACTION = 0.6180339887498949;
+
 // The centre, its children on ring one, and each child's own children fanned out behind it.
 // A child's slice of the circle grows with how many children it has.
 function ringsLayout() {
@@ -703,19 +734,31 @@ function ringsLayout() {
     const middle = angleFromTop(used + share / 2);
     positions[id] = { x: Math.cos(middle) * innerRadius, y: Math.sin(middle) * innerRadius };
 
-    // Crowded slices stagger their children over a few rings instead of overlapping them.
     const list = children.get(id);
     if (list.length > 0) {
       const usable = span * 0.9;
-      const capacity = Math.max(1, Math.floor((usable * outerRadius) / 7));
-      const lanes = Math.ceil(list.length / capacity);
-      const slots = Math.ceil(list.length / lanes);
-      list.forEach((child, childIndex) => {
-        const slot = Math.floor(childIndex / lanes);
-        const angle = slots === 1 ? middle : middle + usable / 2 - (usable * (slot + 0.5)) / slots;
-        const radius = outerRadius + (childIndex % lanes) * 14;
-        positions[child] = { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
-      });
+      const capacity = Math.max(1, Math.floor((usable * outerRadius) / CHILD_SPACING));
+      if (list.length <= capacity) {
+        // They fit on one arc behind their item.
+        list.forEach((child, childIndex) => {
+          const angle = list.length === 1 ? middle : middle + usable / 2 - (usable * (childIndex + 0.5)) / list.length;
+          positions[child] = { x: Math.cos(angle) * outerRadius, y: Math.sin(angle) * outerRadius };
+        });
+      } else {
+        // A crowded slice fills a wedge behind its item, biggest nearest the centre. Steps of the
+        // golden ratio spread them evenly across the wedge, and a little jitter, the same on every
+        // redraw, keeps that from reading as rows and columns.
+        const reach = Math.sqrt(outerRadius ** 2 + (2 * list.length * CHILD_AREA) / usable);
+        const phase = (hashString(id) >>> 0) / 4294967296;
+        list.forEach((child, childIndex) => {
+          const random = seededRandom(hashString(child));
+          const depth = Math.min(1, (childIndex + 0.1 + 0.8 * random()) / list.length);
+          const radius = Math.sqrt(outerRadius ** 2 + depth * (reach ** 2 - outerRadius ** 2));
+          const across = ((childIndex * GOLDEN_FRACTION + phase) % 1) - 0.5 + (random() - 0.5) * 0.12;
+          const angle = middle + Math.max(-0.5, Math.min(0.5, across)) * usable;
+          positions[child] = { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+        });
+      }
     }
     used += share;
   });
