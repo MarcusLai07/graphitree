@@ -273,6 +273,7 @@ struct PlaybookChatView: View {
         case .library: return "books.vertical"
         case .stack: return "square.stack.3d.up"
         case .habit: return "person.text.rectangle"
+        case .rule: return "list.bullet.rectangle"
         }
     }
 
@@ -280,7 +281,16 @@ struct PlaybookChatView: View {
         switch change.kind {
         case .library:
             guard let library = change.library else { return nil }
-            let parts = [library.task, library.purpose].filter { !$0.isEmpty && $0.lowercased() != "unknown" }
+            func known(_ text: String?) -> String? {
+                let trimmed = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty || trimmed.lowercased() == "unknown" ? nil : trimmed
+            }
+            let filed = [known(library.category), known(library.task)].compactMap { $0 }.joined(separator: " › ")
+            let status = known(library.status).flatMap { LibraryStatus(rawValue: $0.lowercased()) }
+            var parts: [String] = []
+            if !filed.isEmpty { parts.append(filed) }
+            if let status { parts.append(status.title + (known(library.useInstead).map { ", use \($0) instead" } ?? "")) }
+            if let purpose = known(library.purpose) { parts.append(purpose) }
             return parts.isEmpty ? nil : parts.joined(separator: ". ")
         case .stack:
             let now = playbook.stack[change.question ?? ""]?.choices ?? []
@@ -289,6 +299,10 @@ struct PlaybookChatView: View {
             return text
         case .habit:
             return change.text
+        case .rule:
+            guard let rule = change.rule else { return nil }
+            if !rule.replaces.isEmpty, !rule.text.isEmpty { return "Replaces: \(rule.replaces)" }
+            return rule.text.isEmpty ? nil : rule.category.isEmpty ? "Applies everywhere." : "For \(rule.category)."
         }
     }
 

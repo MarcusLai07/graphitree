@@ -1068,10 +1068,11 @@ check(PlaybookLibrary(name: "a", health: "The repo has been archived.").looksAba
 check(PlaybookLibrary(name: "a", health: "No longer maintained since 2024.").looksAbandoned, "no longer maintained is a warning")
 let bookText = PlaybookFile.markdown(book)
 check(bookText.contains("## Rules for AI tools") && bookText.contains("look under Libraries"), "the playbook starts with rules for AI tools")
-check(bookText.contains("### Drawers") && bookText.contains("### Toasts") && bookText.contains("### Other"), "libraries are grouped by task, untitled ones last")
-check(bookText.range(of: "### Drawers")!.lowerBound < bookText.range(of: "### Toasts")!.lowerBound && bookText.range(of: "### Toasts")!.lowerBound < bookText.range(of: "### Other")!.lowerBound, "task groups are in order")
+check(bookText.contains("### Toasts") && bookText.contains("### Other") && !bookText.contains("### Drawers"), "libraries are grouped by task, untitled ones last")
+check(bookText.range(of: "### Toasts")!.lowerBound < bookText.range(of: "### Other")!.lowerBound, "task groups are in order")
 check(bookText.contains("- **Sonner** (https://sonner.emilkowal.ski)\n"), "a verified library has no draft mark")
-check(bookText.contains("- **Vaul** *avoid for new work, draft*"), "an unmaintained draft says both")
+check(bookText.contains("## Don't use\n\nNot for new work.") && bookText.contains("- **Vaul** (Drawers) *draft*\n  Why: Unmaintained since 2024."), "an unmaintained library moves to Don't use, with why")
+check(!bookText.contains("Each job lists its *default* first"), "a playbook without statuses doesn't explain them")
 check(bookText.contains("- **21st.dev** *not described yet*"), "an empty entry says it isn't described")
 check(bookText.contains("Install: `npm install sonner`. Works with: React."), "install and platforms share a line")
 expectEqual(PlaybookFile.installText("No package. Copy each component from the site."), "No package. Copy each component from the site.", "prose install notes aren't code")
@@ -1080,6 +1081,66 @@ check(bookText.contains("- **Web framework:** Next.js. Vite for internal dashboa
 check(!bookText.contains("UI components"), "unanswered questions are left out")
 check(bookText.contains("### Always do\n\nExplain changes in plain language."), "habits are written under their prompt")
 check(!PlaybookFile.markdown(Playbook()).contains("## Libraries"), "an empty playbook has only the rules")
+
+// Statuses, categories and rules.
+let checkedDay = Date(timeIntervalSince1970: 1_800_000_000)
+var filed = Playbook()
+filed.libraries = [
+    PlaybookLibrary(name: "Motion", task: "UI animation", purpose: "Animation for React.", verified: true, status: .default, category: "animation"),
+    PlaybookLibrary(name: "Anime.js", task: "Scene animation", purpose: "Timelines.", verified: true, status: .narrow, category: "Animation"),
+    PlaybookLibrary(name: "framer-motion", task: "UI animation", purpose: "The old name.", verified: true, status: .avoid, category: "Animation", useInstead: "Motion"),
+    PlaybookLibrary(name: "Radix", task: "Headless primitives", purpose: "Primitives.", health: "Maintained.", verified: true, status: .legacy, category: "Components", useInstead: "Base UI", checkedOn: checkedDay),
+    PlaybookLibrary(name: "Base UI", task: "Headless primitives", purpose: "Primitives.", verified: true, status: .default, category: "Components"),
+    PlaybookLibrary(name: "TanStack Charts", task: "Standard charts", purpose: "Charts.", status: .candidate, category: "Charts and maps"),
+    PlaybookLibrary(name: "Vaul", task: "Drawers", purpose: "Drawers.", health: "Unmaintained since 2024.", verified: true, status: .narrow, category: "Interaction"),
+    PlaybookLibrary(name: "Studio kit", task: "Widgets", purpose: "Our own widgets.", verified: true, category: "Studio bits"),
+]
+filed.rules = [
+    PlaybookRule(text: "One primitive system per app."),
+    PlaybookRule(text: "CSS always; one JS engine per app.", category: "animation"),
+    PlaybookRule(text: "Run PDF generation on the server.", category: "Server and storage"),
+    PlaybookRule(text: "  "),
+]
+expectEqual(filed.librariesByCategory.map(\.category), ["Components", "Interaction", "Animation", "Charts and maps", "Studio bits"], "known categories keep their order, in any case, then the owner's own")
+expectEqual(filed.librariesByCategory.first?.tasks.first?.libraries.map(\.name), ["Base UI", "Radix"], "within a job, the default comes before a legacy library")
+check(filed.libraries[2].isAvoided && !filed.libraries[6].isAvoided, "avoid is avoided, and the owner's status beats words in the health note")
+let filedText = PlaybookFile.markdown(filed)
+check(filedText.contains("Each job lists its *default* first"), "with statuses, the rules for AI tools explain them")
+check(filedText.contains("## The owner's rules\n\n- One primitive system per app.\n- Server and storage: Run PDF generation on the server.\n"), "rules for everywhere come first, then a category's rules when it has no section")
+check(filedText.contains("### Animation\n\n- CSS always; one JS engine per app.\n\n#### Scene animation\n\n- **Anime.js** *narrow*\n"), "a category's rules sit under its heading, above its jobs")
+check(filedText.contains("- **Motion** *default*\n"), "the default is marked")
+check(filedText.contains("- **Radix** *legacy, not for new work*\n  Primitives.\n  For new work, use instead: Base UI\n  Health (checked \(PlaybookFile.day(checkedDay))): Maintained."), "a legacy library says what new work uses, and when its health was checked")
+check(filedText.contains("- **TanStack Charts** *candidate, ask first, draft*"), "a candidate says to ask first")
+let librariesPart = filedText.components(separatedBy: "## Don't use").first ?? ""
+check(!librariesPart.contains("**framer-motion**") && filedText.contains("- **framer-motion** (UI animation): use Motion instead."), "a library to avoid is only under Don't use, with its replacement")
+check(filedText.contains("### Studio bits") && !filedText.contains("- \n"), "the owner's own category gets a section, and a blank rule is left out")
+let filedGuide = PlaybookFile.guideSummary(filed).joined(separator: "\n")
+check(filedGuide.contains("- Headless primitives: Base UI; keep Radix only where it's already used"), "the guide names the pick and what to keep only where it's used")
+check(filedGuide.contains("- UI animation: Motion; avoid framer-motion (use Motion) for new work") && filedGuide.contains("- Scene animation: Anime.js (narrow)"), "the guide marks narrow picks and what to use instead")
+check(!filedGuide.contains("TanStack Charts"), "candidates aren't picks in the guide")
+check(filedGuide.contains("The owner's rules:\n\n- One primitive system per app.\n- Animation: CSS always; one JS engine per app."), "the guide carries the rules")
+
+let filedFolder = FileManager.default.temporaryDirectory.appendingPathComponent("graphitree-filed-\(UUID().uuidString)")
+try PlaybookFile.save(filed, to: filedFolder)
+let filedBack = PlaybookFile.load(from: filedFolder)
+check(filedBack.libraries == filed.libraries && filedBack.rules.map(\.text) == filed.rules.prefix(3).map(\.text), "status, category, use instead, the checked date and rules survive a reload; a blank rule doesn't")
+try? FileManager.default.removeItem(at: filedFolder)
+let oddJSON = #"{"libraries":[{"name":"X","status":"sunset","category":5,"checkedOn":"yesterday"}],"rules":[{"text":"A rule","category":"Animation"},{"oops":true},"junk"]}"#
+let oddDecoder = JSONDecoder()
+oddDecoder.dateDecodingStrategy = .iso8601
+let odd = try oddDecoder.decode(Playbook.self, from: Data(oddJSON.utf8))
+check(odd.libraries.count == 1 && odd.libraries[0].status == nil && odd.libraries[0].category.isEmpty && odd.libraries[0].checkedOn == nil, "an unknown status or a bad field reads as unset, keeping the library")
+expectEqual(odd.rules.map(\.text), ["A rule"], "rules that can't be read are skipped")
+expectEqual(PlaybookCategories.guess(task: "Toasts"), "Interaction", "a known job suggests its category")
+let researched = PlaybookResearch.applying(LibraryDraft(name: "a", url: "", task: "", purpose: "", useWhen: "", avoidWhen: "", install: "", platforms: "", health: "Active, 2026."), to: PlaybookLibrary(name: "a", status: .legacy, category: "Components"), now: checkedDay)
+check(researched.checkedOn == checkedDay && researched.status == .legacy && researched.category == "Components", "research dates the health note it writes and leaves status and category alone")
+
+let animationPicks = PlaybookPicks.find("animation", in: filed)
+expectEqual(animationPicks.first?.library.name, "Motion", "the default comes first for its job")
+check(PlaybookPicks.answer("animation", in: filed).contains("The owner's rules for Animation:\n- CSS always; one JS engine per app."), "a pick carries its category's rules")
+check(PlaybookPicks.answer("framer", in: filed).contains("Use what it names instead: Motion."), "a pick to avoid points to its replacement")
+let radixPick = PlaybookPicks.describe(filed.libraries[3])
+check(radixPick.contains("keep where it's already used, not for new work") && radixPick.contains("Use instead: Base UI"), "a legacy pick says so and names the replacement")
 
 let bookFolder = FileManager.default.temporaryDirectory.appendingPathComponent("graphitree-playbook-\(UUID().uuidString)")
 try PlaybookFile.save(book, to: bookFolder, now: Date(timeIntervalSince1970: 1_800_000_000))
@@ -1396,6 +1457,37 @@ check(chatInstructions.contains("- ui: UI components.") && chatInstructions.cont
 check(chatInstructions.contains("- Sonner (Toasts) [verified]") && chatInstructions.contains("- Vaul (Drawers) [draft, avoid for new work]"), "the model sees the playbook as it is")
 check(chatInstructions.contains("- Libraries found: Radix UI (1), Sonner (1)") && chatInstructions.contains("- UI components: Radix UI (1), SwiftUI (1), shadcn/ui (1)"), "the model sees what the projects use")
 check(!chatInstructions.contains("one JSON object"), "structured output needs no JSON instructions")
+check(chatInstructions.contains("Categories (name: what goes in it):\n- Components: ") && chatInstructions.contains("status is default (the pick for its job)"), "the model sees the categories and what each status means")
+check(PlaybookChat.schema.contains(#""enum":["","default","narrow","legacy","candidate","avoid"]"#) && PlaybookChat.schema.contains(#""rules":{"#), "the schema has statuses and rules")
+let filedChatText = PlaybookChat.playbookText(filed)
+check(filedChatText.contains("- Radix (Components › Headless primitives) [verified, legacy]: Primitives. Use instead: Base UI.") && filedChatText.contains("Rules (exact text, for replaces):\n- One primitive system per app.\n- [Animation] CSS always; one JS engine per app."), "the model sees categories, statuses and rules")
+
+let filedReply = PlaybookChat.reply(from: [
+    "reply": "Filed.",
+    "libraries": [["name": "Sonner", "url": "", "task": "Toasts", "purpose": "", "useWhen": "", "avoidWhen": "", "install": "", "platforms": "", "health": "unknown", "status": "default", "category": "interaction", "useInstead": "", "reason": "r"]],
+    "stack": [], "habits": [],
+    "rules": [["text": "One toast library per app.", "category": "interaction", "replaces": "", "reason": "r"], ["text": "", "category": "", "replaces": "", "reason": "nothing"]],
+])
+expectEqual(filedReply.changes.map(\.kind), [.library, .rule], "statuses, categories and rules are read; an empty rule is dropped")
+var filedChat = book
+for change in filedReply.changes { filedChat = PlaybookChat.applying(change, to: filedChat) }
+let filedSonner = filedChat.libraries.first { $0.name == "Sonner" }
+check(filedSonner?.status == .default && filedSonner?.category == "Interaction" && filedSonner?.health == "Maintained, 2026.", "the chat sets status and category, and an unknown health keeps the old note")
+check(filedChat.rules.map(\.text) == ["One toast library per app."] && filedChat.rules.first?.category == "Interaction", "a rule from the chat is added with the category's own spelling")
+let changeRule = PlaybookChange(kind: .rule, rule: RuleDraft(text: "Sonner is the only toast library.", category: "Interaction", replaces: "one toast library per app"))
+filedChat = PlaybookChat.applying(changeRule, to: filedChat)
+expectEqual(filedChat.rules.map(\.text), ["Sonner is the only toast library."], "a rule is changed by its old text")
+let removeRule = PlaybookChange(kind: .rule, rule: RuleDraft(text: "", replaces: "Sonner is the only toast library."))
+expectEqual(PlaybookChat.applying(removeRule, to: filedChat).rules.count, 0, "an empty text removes the rule it replaces")
+expectEqual(PlaybookChat.label(changeRule), "Change rule (Interaction): Sonner is the only toast library.", "a rule change is labelled")
+expectEqual(PlaybookChat.label(removeRule), "Remove rule: Sonner is the only toast library.", "a rule removal is labelled")
+let keepFiling = PlaybookChange(kind: .library, library: LibraryDraft(name: "sonner", url: "", task: "", purpose: "", useWhen: "", avoidWhen: "", install: "", platforms: "", health: "Maintained, 2027.", status: "", category: "", useInstead: ""))
+let refiled = PlaybookChat.applying(keepFiling, to: filedChat).libraries.first { $0.name == "Sonner" }
+check(refiled?.status == .default && refiled?.category == "Interaction" && refiled?.checkedOn != nil, "an empty status or category keeps what's there, and a new health note is dated")
+let olderChat = #"[{"id":"9C1A3E39-0F59-4C8B-9D5B-7E8E2B9D0A11","role":"assistant","text":"Old","changes":[{"id":"0B7A1C2D-3E4F-4A5B-8C6D-7E8F9A0B1C2D","kind":"library","reason":"","library":{"name":"A","url":"","task":"","purpose":"","useWhen":"","avoidWhen":"","install":"","platforms":"","health":""},"choices":[],"notes":"","text":"","state":"applied"}],"at":"2026-01-01T00:00:00Z","isError":false}]"#
+let chatDecoder = JSONDecoder()
+chatDecoder.dateDecodingStrategy = .iso8601
+check((try? chatDecoder.decode([ChatTurn].self, from: Data(olderChat.utf8)))?.first?.changes.first?.library?.name == "A", "a chat saved before statuses and rules still loads")
 
 let structuredBody = PlaybookChat.anthropicBody(chatTurns, playbook: book, scan: nil, model: "claude-opus-5-5", structured: true)
 check(structuredBody["output_config"] != nil && structuredBody["fallbacks"] as? String == "default", "the API request asks for the schema and refusal fallbacks")

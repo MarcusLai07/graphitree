@@ -78,6 +78,11 @@ struct LibraryDraft: Codable, Equatable, Sendable {
     var install: String
     var platforms: String
     var health: String
+    /// Set by the chat, never by research: `LibraryStatus` raw values, empty to keep what's there.
+    /// Optional so chats saved before these fields still load.
+    var status: String? = nil
+    var category: String? = nil
+    var useInstead: String? = nil
 }
 
 enum PlaybookResearch {
@@ -141,10 +146,11 @@ enum PlaybookResearch {
     }
 
     /// Fills a library from a draft. The person's own notes stay, and it's marked as a draft again.
-    static func applying(_ draft: LibraryDraft, to library: PlaybookLibrary) -> PlaybookLibrary {
+    /// A new health note records the day it was checked.
+    static func applying(_ draft: LibraryDraft, to library: PlaybookLibrary, now: Date = .now) -> PlaybookLibrary {
         var result = library
-        func keep(_ text: String) -> String? {
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        func keep(_ text: String?) -> String? {
+            let trimmed = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty || trimmed.lowercased() == "unknown" ? nil : trimmed
         }
         if result.url.isEmpty, let url = keep(draft.url) { result.url = url }
@@ -154,7 +160,14 @@ enum PlaybookResearch {
         result.avoidWhen = keep(draft.avoidWhen) ?? result.avoidWhen
         result.install = keep(draft.install) ?? result.install
         result.platforms = keep(draft.platforms) ?? result.platforms
-        result.health = keep(draft.health) ?? result.health
+        if let health = keep(draft.health) {
+            result.health = health
+            result.checkedOn = now
+        }
+        // The chat sets these only when the owner asked, and they review it, so they replace what's there.
+        if let status = keep(draft.status).flatMap({ LibraryStatus(rawValue: $0.lowercased()) }) { result.status = status }
+        if let category = keep(draft.category) { result.category = PlaybookCategories.canonical(category) }
+        result.useInstead = keep(draft.useInstead) ?? result.useInstead
         result.verified = false
         result.drafted = true
         return result
@@ -383,6 +396,7 @@ enum PlaybookBackup {
     static func summary(of playbook: Playbook, now: Date = .now) -> String {
         let answered = playbook.stack.values.filter { !$0.isEmpty }.count
         var parts = ["\(playbook.libraries.count) librar\(playbook.libraries.count == 1 ? "y" : "ies")", "\(answered) stack answer\(answered == 1 ? "" : "s")"]
+        if !playbook.rules.isEmpty { parts.append("\(playbook.rules.count) rule\(playbook.rules.count == 1 ? "" : "s")") }
         if let saved = playbook.updatedAt {
             let formatter = RelativeDateTimeFormatter()
             formatter.unitsStyle = .full

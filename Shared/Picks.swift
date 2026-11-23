@@ -62,7 +62,13 @@ enum PlaybookPicks {
                 if contains(library.useWhen, term) { score += 2 }
             }
             guard score > 0 else { return nil }
-            if library.looksAbandoned { score -= 6 }
+            if library.isAvoided { score -= 6 }
+            switch library.status {
+            case .default: score += 2
+            case .legacy: score -= 3
+            case .candidate: score -= 4
+            case .narrow, .avoid, nil: break
+            }
             if library.verified { score += 1 }
             return PickMatch(library: library, score: max(score, 1))
         }
@@ -73,13 +79,24 @@ enum PlaybookPicks {
 
     static func describe(_ library: PlaybookLibrary) -> String {
         var marks: [String] = []
-        if library.looksAbandoned { marks.append("avoid for new work") }
+        if library.isAvoided {
+            marks.append("avoid for new work")
+        } else if let status = library.status {
+            switch status {
+            case .default: marks.append("the owner's pick")
+            case .narrow: marks.append("only for what its notes say")
+            case .legacy: marks.append("keep where it's already used, not for new work")
+            case .candidate: marks.append("candidate, ask the owner before using it")
+            case .avoid: break
+            }
+        }
         if !library.verified { marks.append(library.isDescribed ? "AI draft, not checked by the owner" : "not described yet") }
         var lines = ["\(library.name)\(library.task.isEmpty ? "" : " (\(library.task))")\(marks.isEmpty ? "" : ": " + marks.joined(separator: ", "))"]
         if !library.url.isEmpty { lines.append("  \(library.url)") }
         if !library.purpose.isEmpty { lines.append("  \(library.purpose)") }
         if !library.useWhen.isEmpty { lines.append("  Use when: \(library.useWhen)") }
         if !library.avoidWhen.isEmpty { lines.append("  Avoid when: \(library.avoidWhen)") }
+        if !library.useInstead.isEmpty { lines.append("  Use instead: \(library.useInstead)") }
         if !library.install.isEmpty { lines.append("  Install: \(library.install)") }
         if !library.health.isEmpty { lines.append("  Health: \(library.health)") }
         if !library.notes.isEmpty { lines.append("  Owner's note: \(library.notes)") }
@@ -94,8 +111,17 @@ enum PlaybookPicks {
         }
         let best = matches.prefix(4)
         var text = best.map { describe($0.library) }.joined(separator: "\n\n")
-        if best.allSatisfy({ $0.library.looksAbandoned }) {
-            text += "\n\nThe owner marks this to avoid for new work, and the playbook has nothing else for the job. Ask the owner before picking a replacement."
+        if best.allSatisfy({ $0.library.isAvoided }) {
+            let instead = best.map(\.library.useInstead).filter { !$0.isEmpty }
+            text += instead.isEmpty
+                ? "\n\nThe owner marks this to avoid for new work, and the playbook has nothing else for the job. Ask the owner before picking a replacement."
+                : "\n\nThe owner marks this to avoid for new work. Use what it names instead: \(instead.joined(separator: "; "))."
+        }
+        // The rules for the area these picks belong to, such as one animation engine per app.
+        let categories = PlaybookCategories.sorted(best.map { PlaybookCategories.canonical($0.library.category) }).filter { !$0.isEmpty }
+        let rules = categories.flatMap { playbook.rules(for: $0) }
+        if !rules.isEmpty {
+            text += "\n\nThe owner's rules for \(categories.joined(separator: " and ")):\n" + rules.map { "- \($0.text)" }.joined(separator: "\n")
         }
         if best.contains(where: { !$0.library.verified }) {
             text += "\n\nDrafts were written by AI. Confirm details in the library's docs before relying on them."

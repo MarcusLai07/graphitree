@@ -4,6 +4,120 @@ import Foundation
 // you default to, and how you work. Graphitree keeps it as `playbook.json` and writes `PLAYBOOK.md`
 // beside the agent guide, which links to it.
 
+/// Where a library stands for new work. Unset means the owner hasn't said, and only its health
+/// note can warn AI tools off it.
+enum LibraryStatus: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// The pick for its job.
+    case `default`
+    /// Kept, but only for the job or the place its notes describe.
+    case narrow
+    /// Stays in projects that already use it; new work picks something else.
+    case legacy
+    /// Being considered. AI tools ask before using it.
+    case candidate
+    /// Not for new work. `useInstead` names what to pick.
+    case avoid
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .default: return "Default"
+        case .narrow: return "Narrow"
+        case .legacy: return "Legacy"
+        case .candidate: return "Candidate"
+        case .avoid: return "Avoid"
+        }
+    }
+
+    /// What it means, for the editor and for AI tools.
+    var meaning: String {
+        switch self {
+        case .default: return "The pick for its job"
+        case .narrow: return "Only for what its notes say"
+        case .legacy: return "Keep where it's used; not for new work"
+        case .candidate: return "Not adopted yet; ask first"
+        case .avoid: return "Don't use in new work"
+        }
+    }
+
+    /// The order libraries take within a job: the pick first, what to avoid last.
+    var rank: Int {
+        switch self {
+        case .default: return 0
+        case .narrow: return 1
+        case .legacy: return 3
+        case .candidate: return 4
+        case .avoid: return 5
+        }
+    }
+}
+
+/// The broad areas libraries are filed under, so a long playbook reads as a few sections
+/// instead of one list of jobs. A library can name another category; it's kept as written.
+enum PlaybookCategories {
+    static let all: [(name: String, covers: String)] = [
+        ("Components", "UI kits, headless primitives, icons, theming"),
+        ("Interaction", "Toasts, menus, pickers, drag and drop, tours"),
+        ("Animation", "UI motion, scene animation, animated numbers, effects"),
+        ("3D and graphics", "3D engines, WebGL, shaders"),
+        ("Charts and maps", "Charts, node graphs, diagrams, maps"),
+        ("Forms and data", "Forms, validation, state, data fetching, routing"),
+        ("Content and documents", "Editors, markdown, sanitising HTML, PDFs, spreadsheets"),
+        ("AI", "Model SDKs and chat interfaces"),
+        ("Server and storage", "Back ends, databases, ORMs, sign-in, jobs"),
+        ("Testing and tooling", "Tests, linting, build tools"),
+    ]
+
+    static var names: [String] { all.map(\.name) }
+
+    /// The category's own spelling for a name in any case, or the name as written.
+    static func canonical(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return names.first { $0.caseInsensitiveCompare(trimmed) == .orderedSame } ?? trimmed
+    }
+
+    /// Known categories in their fixed order, then others by name, then none.
+    static func sorted(_ categories: some Sequence<String>) -> [String] {
+        Array(Set(categories)).sorted { a, b in
+            let ia = names.firstIndex(of: a) ?? (a.isEmpty ? Int.max : names.count)
+            let ib = names.firstIndex(of: b) ?? (b.isEmpty ? Int.max : names.count)
+            if ia != ib { return ia < ib }
+            return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+        }
+    }
+
+    /// A category for a job the stack scan knows, so a suggested library arrives filed.
+    static func guess(task: String) -> String {
+        let jobs: [String: String] = [
+            "toasts": "Interaction", "drawers": "Interaction", "command menu": "Interaction", "carousels": "Interaction",
+            "date pickers": "Interaction", "drag and drop": "Interaction", "dashboard grids": "Interaction",
+            "emoji pickers": "Interaction", "image cropping": "Interaction", "product tours": "Interaction",
+            "popover positioning": "Components", "one-time codes": "Interaction",
+            "ui primitives": "Components", "icons": "Components", "styling variants": "Components",
+            "class names": "Components", "dark mode": "Components",
+            "animation": "Animation", "animated numbers": "Animation",
+            "3d graphics": "3D and graphics",
+            "charts": "Charts and maps", "data visualization": "Charts and maps", "diagrams": "Charts and maps",
+            "node graphs": "Charts and maps", "network graphs": "Charts and maps", "maps": "Charts and maps",
+            "routing": "Forms and data", "state": "Forms and data", "data fetching": "Forms and data",
+            "tables": "Forms and data", "forms": "Forms and data", "validation": "Forms and data",
+            "dates": "Forms and data", "long lists": "Forms and data",
+            "rich text editing": "Content and documents", "markdown": "Content and documents",
+            "pdf documents": "Content and documents", "code highlighting": "Content and documents",
+        ]
+        return jobs[task.lowercased().trimmingCharacters(in: .whitespaces)] ?? ""
+    }
+}
+
+/// A rule AI tools follow that isn't about one library, such as "One primitive system per app".
+struct PlaybookRule: Codable, Identifiable, Hashable, Sendable {
+    var id = UUID()
+    var text: String
+    /// The category it belongs to, or empty for a rule that applies everywhere.
+    var category: String = ""
+}
+
 struct PlaybookLibrary: Codable, Identifiable, Hashable, Sendable {
     var id = UUID()
     var name: String
@@ -22,8 +136,22 @@ struct PlaybookLibrary: Codable, Identifiable, Hashable, Sendable {
     /// Written by Claude rather than the person.
     var drafted = false
     var notes: String = ""
+    /// Where it stands for new work. Nil until the owner sets it.
+    var status: LibraryStatus?
+    /// The broad area it's filed under, such as "Animation". Jobs are grouped inside it.
+    var category: String = ""
+    /// What to pick instead, for a library to avoid or one kept only where it's used.
+    var useInstead: String = ""
+    /// When the health note was last written, by hand or from research.
+    var checkedOn: Date?
 
     var isDescribed: Bool { !purpose.isEmpty }
+
+    /// Not for new work: marked avoid, or, with no status set, a health note that says it's abandoned.
+    var isAvoided: Bool { status == .avoid || (status == nil && looksAbandoned) }
+
+    /// Where it sorts within its job: the pick first, an unset status after the narrow ones.
+    var statusRank: Int { isAvoided ? LibraryStatus.avoid.rank : status?.rank ?? 2 }
     /// Health text that says the library shouldn't be picked for new work.
     var looksAbandoned: Bool {
         // "isn't archived" and "no deprecation notice" are good news, so negated words don't count.
@@ -56,6 +184,8 @@ struct Playbook: Codable, Equatable, Sendable {
     /// Stack answers that differ in one main folder, such as `work`, keyed by folder then
     /// question. Optional so playbooks saved before folders still load.
     var folderStacks: [String: [String: StackAnswer]]?
+    /// Rules that aren't about one library, in the owner's order.
+    var rules: [PlaybookRule] = []
 
     /// The stack for new work in a folder: its own answers where it has them, the rest from everywhere.
     func stack(for folder: String?) -> [String: StackAnswer] {
@@ -78,15 +208,38 @@ struct Playbook: Codable, Equatable, Sendable {
     var isEmpty: Bool {
         libraries.isEmpty && stack.values.allSatisfy(\.isEmpty)
             && habits.values.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            && rules.isEmpty
     }
 
-    /// Libraries grouped by task, tasks in alphabetical order with untitled ones last.
+    /// Libraries grouped by task, tasks in alphabetical order with untitled ones last. Within a
+    /// task, the pick comes first and what to avoid last.
     var librariesByTask: [(task: String, libraries: [PlaybookLibrary])] {
+        Self.byTask(libraries)
+    }
+
+    /// Libraries grouped by category, then by task inside each one. Known categories keep their
+    /// fixed order; libraries with none come last.
+    var librariesByCategory: [(category: String, tasks: [(task: String, libraries: [PlaybookLibrary])])] {
+        let groups = Dictionary(grouping: libraries) { PlaybookCategories.canonical($0.category) }
+        return PlaybookCategories.sorted(groups.keys).map { (category: $0, tasks: Self.byTask(groups[$0]!)) }
+    }
+
+    /// The rules for one category, or the ones that apply everywhere for "".
+    func rules(for category: String) -> [PlaybookRule] {
+        rules.filter { PlaybookCategories.canonical($0.category) == category && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    private static func byTask(_ libraries: [PlaybookLibrary]) -> [(task: String, libraries: [PlaybookLibrary])] {
         let groups = Dictionary(grouping: libraries) { $0.task.trimmingCharacters(in: .whitespaces).isEmpty ? "" : $0.task }
         return groups.keys.sorted { a, b in
             if a.isEmpty != b.isEmpty { return !a.isEmpty }
             return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
-        }.map { (task: $0, libraries: groups[$0]!.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) }
+        }.map { task in
+            (task: task, libraries: groups[task]!.sorted { a, b in
+                if a.statusRank != b.statusRank { return a.statusRank < b.statusRank }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            })
+        }
     }
 }
 
@@ -123,6 +276,20 @@ extension PlaybookLibrary {
         verified = values.value(.verified, or: false)
         drafted = values.value(.drafted, or: false)
         notes = values.value(.notes, or: "")
+        // A status a newer Graphitree invented reads as unset rather than losing the library.
+        status = LibraryStatus(rawValue: values.value(.status, or: ""))
+        category = values.value(.category, or: "")
+        useInstead = values.value(.useInstead, or: "")
+        checkedOn = values.value(.checkedOn, or: nil)
+    }
+}
+
+extension PlaybookRule {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = values.value(.id, or: UUID())
+        text = values.value(.text, or: "")
+        category = values.value(.category, or: "")
     }
 }
 
@@ -153,6 +320,17 @@ extension Playbook {
         habits = values.value(.habits, or: [:])
         updatedAt = values.value(.updatedAt, or: nil)
         folderStacks = values.value(.folderStacks, or: nil)
+        var rules: [PlaybookRule] = []
+        if var list = try? values.nestedUnkeyedContainer(forKey: .rules) {
+            while !list.isAtEnd {
+                if let rule = try? list.decode(PlaybookRule.self) {
+                    if !rule.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { rules.append(rule) }
+                } else if (try? list.decode(SkippedValue.self)) == nil {
+                    break
+                }
+            }
+        }
+        self.rules = rules
     }
 }
 
@@ -403,35 +581,74 @@ enum PlaybookFile {
         lines.append("")
         lines.append("- Before writing a component or helper yourself, look under Libraries. If one there does the job, use it.")
         lines.append("- Prefer what the project already depends on. Don't replace it with a library from this list without asking.")
+        if playbook.libraries.contains(where: { $0.status != nil }) {
+            lines.append("- Each job lists its *default* first: that's the pick. Use a *narrow* one only for what its notes say. Keep a *legacy* one in projects that already use it, but don't add it to new ones. Ask before using a *candidate*.")
+        }
         lines.append("- Entries marked *draft* were written by AI and not checked yet. Confirm details in their docs before relying on them.")
-        lines.append("- Don't pick a library marked *avoid for new work*, even if it's listed.")
+        lines.append("- Don't pick a library marked *avoid for new work*, even if it's listed. Use what it says to use instead.")
         lines.append("- For a new project, start from Stack, and ask before going against it.")
 
-        if !playbook.libraries.isEmpty {
+        let kept = playbook.libraries.filter { !$0.isAvoided }
+        var listed = Playbook()
+        listed.libraries = kept
+        let categories = listed.librariesByCategory
+        // Without categories, jobs are the sections, as before categories existed.
+        let flat = categories.count == 1 && categories[0].category.isEmpty
+        let shown = flat ? [] : categories.map(\.category).filter { !$0.isEmpty }
+
+        // Rules for everything, then rules for categories that have no section of their own.
+        var ownRules = playbook.rules(for: "").map { "- \(oneLine($0.text))" }
+        let otherCategories = PlaybookCategories.sorted(playbook.rules.map { PlaybookCategories.canonical($0.category) }).filter { !$0.isEmpty && !shown.contains($0) }
+        for category in otherCategories {
+            ownRules += playbook.rules(for: category).map { "- \(category): \(oneLine($0.text))" }
+        }
+        if !ownRules.isEmpty {
+            lines.append("")
+            lines.append("## The owner's rules")
+            lines.append("")
+            lines.append(contentsOf: ownRules)
+        }
+
+        if !kept.isEmpty {
             lines.append("")
             lines.append("## Libraries")
-            for group in playbook.librariesByTask {
-                lines.append("")
-                lines.append("### \(group.task.isEmpty ? "Other" : group.task)")
-                lines.append("")
-                for library in group.libraries {
-                    var head = "- **\(library.name)**"
-                    if !library.url.isEmpty { head += " (\(library.url))" }
-                    var marks: [String] = []
-                    if library.looksAbandoned { marks.append("avoid for new work") }
-                    if !library.verified { marks.append(library.isDescribed ? "draft" : "not described yet") }
-                    if !marks.isEmpty { head += " *\(marks.joined(separator: ", "))*" }
-                    lines.append(head)
-                    if !library.purpose.isEmpty { lines.append("  \(oneLine(library.purpose))") }
-                    if !library.useWhen.isEmpty { lines.append("  Use when: \(oneLine(library.useWhen))") }
-                    if !library.avoidWhen.isEmpty { lines.append("  Avoid when: \(oneLine(library.avoidWhen))") }
-                    var facts: [String] = []
-                    if !library.install.isEmpty { facts.append("Install: " + installText(library.install)) }
-                    if !library.platforms.isEmpty { facts.append(sentence("Works with: \(oneLine(library.platforms))")) }
-                    if !facts.isEmpty { lines.append("  " + facts.joined(separator: " ")) }
-                    if !library.health.isEmpty { lines.append("  Health: \(oneLine(library.health))") }
-                    if !library.notes.isEmpty { lines.append("  Owner's note: \(oneLine(library.notes))") }
+            for group in categories {
+                if !flat {
+                    lines.append("")
+                    lines.append("### \(group.category.isEmpty ? "Other" : group.category)")
+                    let rules = playbook.rules(for: group.category)
+                    if !group.category.isEmpty, !rules.isEmpty {
+                        lines.append("")
+                        for rule in rules { lines.append("- \(oneLine(rule.text))") }
+                    }
                 }
+                for job in group.tasks {
+                    lines.append("")
+                    lines.append("\(flat ? "###" : "####") \(job.task.isEmpty ? "Other" : job.task)")
+                    lines.append("")
+                    for library in job.libraries { lines.append(contentsOf: entry(library)) }
+                }
+            }
+        }
+
+        let avoided = playbook.libraries.filter(\.isAvoided)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        if !avoided.isEmpty {
+            lines.append("")
+            lines.append("## Don't use")
+            lines.append("")
+            lines.append("Not for new work. Existing projects can keep them until that code is next changed.")
+            lines.append("")
+            for library in avoided {
+                var head = "- **\(library.name)**"
+                if !library.task.isEmpty { head += " (\(library.task))" }
+                if !library.verified { head += " *\(library.isDescribed ? "draft" : "not described yet")*" }
+                let instead = oneLine(library.useInstead)
+                head += instead.isEmpty ? "" : ": use \(instead) instead."
+                lines.append(head)
+                let why = [library.avoidWhen, library.health].map(oneLine).first { !$0.isEmpty }
+                if let why { lines.append("  Why: \(why)") }
+                if !library.notes.isEmpty { lines.append("  Owner's note: \(oneLine(library.notes))") }
             }
         }
 
@@ -482,6 +699,43 @@ enum PlaybookFile {
             }
         }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// One library under its job: name and marks, then what AI tools need to use it well.
+    private static func entry(_ library: PlaybookLibrary) -> [String] {
+        var lines: [String] = []
+        var head = "- **\(library.name)**"
+        if !library.url.isEmpty { head += " (\(library.url))" }
+        var marks: [String] = []
+        switch library.status {
+        case .default: marks.append("default")
+        case .narrow: marks.append("narrow")
+        case .legacy: marks.append("legacy, not for new work")
+        case .candidate: marks.append("candidate, ask first")
+        case .avoid, nil: break
+        }
+        if !library.verified { marks.append(library.isDescribed ? "draft" : "not described yet") }
+        if !marks.isEmpty { head += " *\(marks.joined(separator: ", "))*" }
+        lines.append(head)
+        if !library.purpose.isEmpty { lines.append("  \(oneLine(library.purpose))") }
+        if !library.useWhen.isEmpty { lines.append("  Use when: \(oneLine(library.useWhen))") }
+        if !library.avoidWhen.isEmpty { lines.append("  Avoid when: \(oneLine(library.avoidWhen))") }
+        if !library.useInstead.isEmpty { lines.append("  For new work, use instead: \(oneLine(library.useInstead))") }
+        var facts: [String] = []
+        if !library.install.isEmpty { facts.append("Install: " + installText(library.install)) }
+        if !library.platforms.isEmpty { facts.append(sentence("Works with: \(oneLine(library.platforms))")) }
+        if !facts.isEmpty { lines.append("  " + facts.joined(separator: " ")) }
+        if !library.health.isEmpty {
+            let checked = library.checkedOn.map { " (checked \(day($0)))" } ?? ""
+            lines.append("  Health\(checked): \(oneLine(library.health))")
+        }
+        if !library.notes.isEmpty { lines.append("  Owner's note: \(oneLine(library.notes))") }
+        return lines
+    }
+
+    /// A date as 2026-11-23, in the Mac's time zone.
+    static func day(_ date: Date) -> String {
+        ISO8601DateFormatter.string(from: date, timeZone: .current, formatOptions: [.withFullDate])
     }
 
     // MARK: The copy graphify reads
@@ -545,16 +799,42 @@ enum PlaybookFile {
     /// stack answer. Empty when there's nothing to say.
     static func guideSummary(_ playbook: Playbook) -> [String] {
         var lines: [String] = []
-        if !playbook.libraries.isEmpty {
+        var jobs: [String] = []
+        // Jobs in category order, so related ones sit together. Candidates aren't picks yet.
+        for group in playbook.librariesByCategory.flatMap(\.tasks) {
+            var use: [String] = []
+            var keep: [String] = []
+            var avoid: [String] = []
+            for library in group.libraries where library.status != .candidate {
+                if library.isAvoided {
+                    let instead = oneLine(library.useInstead)
+                    avoid.append(instead.isEmpty ? library.name : "\(library.name) (use \(instead))")
+                } else if library.status == .legacy {
+                    keep.append(library.name)
+                } else {
+                    use.append(library.status == .narrow ? "\(library.name) (narrow)" : library.name)
+                }
+            }
+            var parts: [String] = []
+            if !use.isEmpty { parts.append(use.joined(separator: ", ")) }
+            if !keep.isEmpty { parts.append("keep \(keep.joined(separator: ", ")) only where it's already used") }
+            if !avoid.isEmpty { parts.append("avoid \(avoid.joined(separator: ", ")) for new work") }
+            guard !parts.isEmpty else { continue }
+            jobs.append("- \(group.task.isEmpty ? "Other" : group.task): \(parts.joined(separator: "; "))")
+        }
+        if !jobs.isEmpty {
             lines.append("Libraries, by the job they do:")
             lines.append("")
-            for group in playbook.librariesByTask {
-                let use = group.libraries.filter { !$0.looksAbandoned }.map(\.name)
-                let avoid = group.libraries.filter(\.looksAbandoned).map(\.name)
-                var parts: [String] = []
-                if !use.isEmpty { parts.append(use.joined(separator: ", ")) }
-                if !avoid.isEmpty { parts.append("avoid \(avoid.joined(separator: ", ")) for new work") }
-                lines.append("- \(group.task.isEmpty ? "Other" : group.task): \(parts.joined(separator: "; "))")
+            lines.append(contentsOf: jobs)
+        }
+        let rules = playbook.rules.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if !rules.isEmpty {
+            if !lines.isEmpty { lines.append("") }
+            lines.append("The owner's rules:")
+            lines.append("")
+            for rule in rules {
+                let category = PlaybookCategories.canonical(rule.category)
+                lines.append("- \(category.isEmpty ? "" : category + ": ")\(oneLine(rule.text))")
             }
         }
         let answered = PlaybookQuestions.stack.compactMap { question -> String? in

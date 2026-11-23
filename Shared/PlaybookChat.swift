@@ -18,10 +18,18 @@ struct ChatTurn: Codable, Identifiable, Equatable, Sendable {
     var isError = false
 }
 
-/// One change a reply suggests: a library to add or update, a stack answer, or a habit.
+/// A rule the chat suggests: a new one, or a change to the rule whose text is in `replaces`.
+/// An empty `text` with `replaces` set removes that rule.
+struct RuleDraft: Codable, Equatable, Sendable {
+    var text: String
+    var category: String = ""
+    var replaces: String = ""
+}
+
+/// One change a reply suggests: a library to add or update, a stack answer, a habit, or a rule.
 struct PlaybookChange: Codable, Identifiable, Equatable, Sendable {
     enum Kind: String, Codable, Sendable {
-        case library, stack, habit
+        case library, stack, habit, rule
     }
 
     enum State: String, Codable, Sendable {
@@ -40,6 +48,8 @@ struct PlaybookChange: Codable, Identifiable, Equatable, Sendable {
     var habit: String?
     var text = ""
     var state: State = .proposed
+    /// The rule, for a rule change. Optional so chats saved before rules still load.
+    var rule: RuleDraft?
 }
 
 struct ChatReply: Equatable, Sendable {
@@ -147,10 +157,17 @@ enum PlaybookChat {
         func strings(_ names: [String]) -> [String: Any] {
             Dictionary(uniqueKeysWithValues: names.map { ($0, ["type": "string"] as [String: Any]) })
         }
-        let libraryFields = ["name", "url", "task", "purpose", "useWhen", "avoidWhen", "install", "platforms", "health", "reason"]
+        let libraryFields = ["name", "url", "task", "purpose", "useWhen", "avoidWhen", "install", "platforms", "health", "category", "useInstead", "reason"]
+        var libraryProperties = strings(libraryFields)
+        libraryProperties["status"] = ["type": "string", "enum": [""] + LibraryStatus.allCases.map(\.rawValue)]
         let library: [String: Any] = [
             "type": "object", "additionalProperties": false,
-            "properties": strings(libraryFields), "required": libraryFields,
+            "properties": libraryProperties, "required": libraryFields + ["status"],
+        ]
+        let ruleFields = ["text", "category", "replaces", "reason"]
+        let rule: [String: Any] = [
+            "type": "object", "additionalProperties": false,
+            "properties": strings(ruleFields), "required": ruleFields,
         ]
         var stackProperties = strings(["notes", "reason"])
         stackProperties["question"] = ["type": "string", "enum": PlaybookQuestions.stack.map(\.id)]
@@ -172,8 +189,9 @@ enum PlaybookChat {
                 "libraries": ["type": "array", "items": library],
                 "stack": ["type": "array", "items": stack],
                 "habits": ["type": "array", "items": habit],
+                "rules": ["type": "array", "items": rule],
             ],
-            "required": ["reply", "libraries", "stack", "habits"],
+            "required": ["reply", "libraries", "stack", "habits", "rules"],
         ]
     }
 
@@ -192,12 +210,20 @@ enum PlaybookChat {
         lines.append(searchesWeb
             ? "- Check facts on the web when they matter, such as the latest release, whether a library is maintained, and its install command."
             : "- You can't browse the web. Say so when something may have changed since your training.")
-        lines.append("- Put changes in libraries, stack and habits only when the owner asks for them or agrees to a suggestion. Give each a short reason. The owner reviews every change before it's saved, so say in the reply what you're suggesting. Otherwise leave the lists empty.")
+        lines.append("- Put changes in libraries, stack, habits and rules only when the owner asks for them or agrees to a suggestion. Give each a short reason. The owner reviews every change before it's saved, so say in the reply what you're suggesting. Otherwise leave the lists empty.")
         lines.append("- A library change describes one library fully: name, url, task (2 to 4 words for the job, such as \"Toasts\"; reuse a task already in the playbook when it fits), purpose (one sentence), useWhen, avoidWhen, install, platforms, health (is it maintained: latest release and year). Write \"unknown\" for anything you can't confirm. To update a library already in the playbook, use its exact name.")
+        lines.append("- A library change also has a category, a status and useInstead. category is one of the categories below, spelled as shown. status is default (the pick for its job), narrow (kept only for the job or place its notes describe), legacy (stays in projects that use it; not for new work), candidate (being considered; AI tools ask first) or avoid (not for new work). useInstead names what to pick instead, for legacy and avoid; otherwise it's empty. Leave category, status or useInstead empty to keep what the library has now, and only change them when the owner asks.")
+        lines.append("- A job has one default. Put what the owner says about where a narrow or legacy library may be used in useWhen and avoidWhen.")
         lines.append("- A stack change gives the complete new list of choices for one question. Use the option names below where they fit; other names are allowed. notes holds exceptions, or is empty.")
         lines.append("- A habit change gives the complete new text for one prompt. Keep what's already there unless the owner asks to replace it.")
+        lines.append("- A rule change adds a rule that isn't about one library, such as \"One primitive system per app\": text is one short instruction, and category is one of the categories below, or empty for a rule that applies everywhere. To change a rule, put its current text in replaces; to remove one, put its text in replaces and leave text empty. Otherwise replaces is empty.")
         if asksForJSON {
-            lines.append("- Answer with one JSON object and nothing else: {\"reply\": string, \"libraries\": [...], \"stack\": [...], \"habits\": [...]}, using the fields above, each change with a \"reason\". Stack changes use \"question\", \"choices\" and \"notes\"; habit changes use \"prompt\" and \"text\".")
+            lines.append("- Answer with one JSON object and nothing else: {\"reply\": string, \"libraries\": [...], \"stack\": [...], \"habits\": [...], \"rules\": [...]}, using the fields above, each change with a \"reason\". Stack changes use \"question\", \"choices\" and \"notes\"; habit changes use \"prompt\" and \"text\"; rule changes use \"text\", \"category\" and \"replaces\".")
+        }
+        lines.append("")
+        lines.append("Categories (name: what goes in it):")
+        for category in PlaybookCategories.all {
+            lines.append("- \(category.name): \(category.covers)")
         }
         lines.append("")
         lines.append("Stack questions (id: title. Options):")
@@ -231,13 +257,29 @@ enum PlaybookChat {
             lines.append("Libraries:")
             for library in playbook.libraries.sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) {
                 var marks: [String] = [library.verified ? "verified" : "draft"]
-                if library.looksAbandoned { marks.append("avoid for new work") }
+                if let status = library.status {
+                    marks.append(status.rawValue)
+                } else if library.looksAbandoned {
+                    marks.append("avoid for new work")
+                }
                 var line = "- \(library.name)"
-                if !library.task.isEmpty { line += " (\(library.task))" }
+                let filed = [library.category, library.task].filter { !$0.isEmpty }
+                if !filed.isEmpty { line += " (\(filed.joined(separator: " › ")))" }
                 line += " [\(marks.joined(separator: ", "))]"
                 if !library.purpose.isEmpty { line += ": \(library.purpose)" }
+                if !library.useInstead.isEmpty { line += " Use instead: \(library.useInstead)." }
                 if !library.notes.isEmpty { line += " Owner's note: \(library.notes)" }
                 lines.append(line)
+            }
+        }
+        let rules = playbook.rules.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if rules.isEmpty {
+            lines.append("Rules: none yet.")
+        } else {
+            lines.append("Rules (exact text, for replaces):")
+            for rule in rules {
+                let category = PlaybookCategories.canonical(rule.category)
+                lines.append("- \(category.isEmpty ? "" : "[\(category)] ")\(rule.text)")
             }
         }
         let answered = PlaybookQuestions.stack.filter { !(playbook.stack[$0.id]?.isEmpty ?? true) }
@@ -378,7 +420,8 @@ enum PlaybookChat {
             let draft = LibraryDraft(
                 name: text(item, "name"), url: text(item, "url"), task: text(item, "task"), purpose: text(item, "purpose"),
                 useWhen: text(item, "useWhen"), avoidWhen: text(item, "avoidWhen"), install: text(item, "install"),
-                platforms: text(item, "platforms"), health: text(item, "health")
+                platforms: text(item, "platforms"), health: text(item, "health"),
+                status: text(item, "status"), category: text(item, "category"), useInstead: text(item, "useInstead")
             )
             guard !draft.name.isEmpty else { continue }
             changes.append(PlaybookChange(kind: .library, reason: text(item, "reason"), library: draft))
@@ -394,6 +437,11 @@ enum PlaybookChat {
             let body = text(item, "text")
             guard PlaybookQuestions.habits.contains(where: { $0.id == prompt }), !body.isEmpty else { continue }
             changes.append(PlaybookChange(kind: .habit, reason: text(item, "reason"), habit: prompt, text: body))
+        }
+        for item in object["rules"] as? [[String: Any]] ?? [] {
+            let rule = RuleDraft(text: text(item, "text"), category: PlaybookCategories.canonical(text(item, "category")), replaces: text(item, "replaces"))
+            guard !rule.text.isEmpty || !rule.replaces.isEmpty else { continue }
+            changes.append(PlaybookChange(kind: .rule, reason: text(item, "reason"), rule: rule))
         }
         return ChatReply(text: text(object, "reply"), changes: changes)
     }
@@ -433,6 +481,21 @@ enum PlaybookChat {
         case .habit:
             guard let id = change.habit else { return result }
             result.habits[id] = change.text
+        case .rule:
+            guard let draft = change.rule else { return result }
+            let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let category = PlaybookCategories.canonical(draft.category)
+            let target = key(draft.replaces)
+            if !target.isEmpty, let index = result.rules.firstIndex(where: { key($0.text) == target }) {
+                if text.isEmpty {
+                    result.rules.remove(at: index)
+                } else {
+                    result.rules[index].text = text
+                    result.rules[index].category = category
+                }
+            } else if !text.isEmpty, !result.rules.contains(where: { key($0.text) == key(text) }) {
+                result.rules.append(PlaybookRule(text: text, category: category))
+            }
         }
         return result
     }
@@ -449,6 +512,11 @@ enum PlaybookChat {
             return "\(title): \(change.choices.isEmpty ? "no default" : change.choices.joined(separator: ", "))"
         case .habit:
             return PlaybookQuestions.habits.first { $0.id == change.habit }?.title ?? "How you work"
+        case .rule:
+            guard let rule = change.rule else { return "A rule" }
+            let area = rule.category.isEmpty ? "" : " (\(rule.category))"
+            if rule.text.isEmpty { return "Remove rule: \(rule.replaces)" }
+            return rule.replaces.isEmpty ? "Add rule\(area): \(rule.text)" : "Change rule\(area): \(rule.text)"
         }
     }
 

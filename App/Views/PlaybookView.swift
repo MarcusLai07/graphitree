@@ -216,16 +216,98 @@ struct PlaybookView: View {
                 healthCheckCard
                 if !LabCatalog.bundled.entries.isEmpty { labCard }
             }
-            ForEach(playbook.librariesByTask, id: \.task) { group in
-                Text(group.task.isEmpty ? "No task yet" : group.task)
-                    .font(.caption.weight(.semibold))
-                    .tracking(0.8)
-                    .textCase(.uppercase)
-                    .foregroundStyle(Palette.gold.opacity(0.85))
-                    .padding(.top, 6)
-                ForEach(group.libraries) { libraryCard($0) }
+            rulesCard
+            let groups = playbook.librariesByCategory
+            // A playbook with no categories yet reads by job, as it always has.
+            let flat = groups.count == 1 && groups[0].category.isEmpty
+            ForEach(groups, id: \.category) { group in
+                if !flat {
+                    Text(group.category.isEmpty ? "Not filed yet" : group.category)
+                        .font(.caption.weight(.semibold))
+                        .tracking(0.8)
+                        .textCase(.uppercase)
+                        .foregroundStyle(Palette.gold.opacity(0.85))
+                        .padding(.top, 10)
+                    if !group.category.isEmpty {
+                        ForEach(playbook.rules(for: group.category)) { rule in
+                            Label(rule.text, systemImage: "list.bullet")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                ForEach(group.tasks, id: \.task) { job in
+                    jobHeading(job.task.isEmpty ? "No task yet" : job.task, flat: flat)
+                    ForEach(job.libraries) { libraryCard($0) }
+                }
             }
         }
+    }
+
+    @ViewBuilder
+    private func jobHeading(_ title: String, flat: Bool) -> some View {
+        if flat {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .tracking(0.8)
+                .textCase(.uppercase)
+                .foregroundStyle(Palette.gold.opacity(0.85))
+                .padding(.top, 6)
+        } else {
+            Text(title).font(.callout.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 2)
+        }
+    }
+
+    /// Rules that aren't about one library, each for everywhere or one category.
+    private var rulesCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "list.bullet.rectangle").foregroundStyle(Palette.gold)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Rules").font(.body.weight(.medium))
+                    Text("What AI tools should follow beyond any one library, such as \"One primitive system per app\". File a rule under a category to show it there, or leave it for everywhere.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button("Add Rule") { edit { $0.rules.append(PlaybookRule(text: "")) } }
+                    .buttonStyle(SoftButtonStyle())
+            }
+            ForEach(playbook.rules) { rule in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    TextField("A rule AI tools should follow", text: Binding(
+                        get: { playbook.rules.first { $0.id == rule.id }?.text ?? "" },
+                        set: { value in updateRule(rule.id) { $0.text = value } }
+                    ), axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...3)
+                    Picker("Category", selection: Binding(
+                        get: { PlaybookCategories.canonical(playbook.rules.first { $0.id == rule.id }?.category ?? "") },
+                        set: { value in updateRule(rule.id) { $0.category = value } }
+                    )) {
+                        Text("Everywhere").tag("")
+                        ForEach(categoryChoices(including: rule.category), id: \.self) { Text($0).tag($0) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 190)
+                    Button("Remove", systemImage: "trash") { edit { $0.rules.removeAll { $0.id == rule.id } } }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Remove this rule")
+                }
+                .padding(.leading, 26)
+            }
+        }
+        .modifier(RowCard())
+    }
+
+    /// The known categories, plus one of the owner's own when it's in use.
+    private func categoryChoices(including current: String) -> [String] {
+        let own = PlaybookCategories.canonical(current)
+        return PlaybookCategories.names + (own.isEmpty || PlaybookCategories.names.contains(own) ? [] : [own])
     }
 
     private var undescribed: [PlaybookLibrary] { playbook.libraries.filter { !$0.isDescribed && !$0.verified } }
@@ -235,7 +317,7 @@ struct PlaybookView: View {
         var seen: Set<String> = []
         return StackScan.knownLibraries.compactMap { known in
             guard let projects = scan.libraries[known.name], !PlaybookImport.contains(known, in: playbook.libraries), seen.insert(known.name).inserted else { return nil }
-            return (known.name, projects.count, PlaybookLibrary(name: known.name, url: known.url, task: known.task))
+            return (known.name, projects.count, PlaybookLibrary(name: known.name, url: known.url, task: known.task, category: PlaybookCategories.guess(task: known.task)))
         }
         .sorted { $0.projects > $1.projects }
     }
@@ -341,6 +423,7 @@ struct PlaybookView: View {
                 if !library.purpose.isEmpty { Text(library.purpose).font(.callout).fixedSize(horizontal: false, vertical: true) }
                 if !library.useWhen.isEmpty { fact("Use when", library.useWhen) }
                 if !library.avoidWhen.isEmpty { fact("Avoid when", library.avoidWhen) }
+                if !library.useInstead.isEmpty { fact("Use instead", library.useInstead) }
                 if !library.install.isEmpty {
                     HStack(spacing: 6) {
                         Text(library.install).font(.caption.monospaced()).textSelection(.enabled)
@@ -348,7 +431,8 @@ struct PlaybookView: View {
                     }
                 }
                 if !library.health.isEmpty {
-                    Label(library.health, systemImage: library.looksAbandoned ? "exclamationmark.triangle.fill" : "heart.text.square")
+                    let checked = library.checkedOn.map { " Checked \($0.formatted(date: .abbreviated, time: .omitted))." } ?? ""
+                    Label(library.health + checked, systemImage: library.looksAbandoned ? "exclamationmark.triangle.fill" : "heart.text.square")
                         .font(.caption)
                         .foregroundStyle(library.looksAbandoned ? Palette.coral : .secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -369,8 +453,14 @@ struct PlaybookView: View {
 
     @ViewBuilder
     private func badge(_ library: PlaybookLibrary) -> some View {
-        if library.looksAbandoned {
+        if library.isAvoided {
             Text("Avoid for new work").font(.caption2.weight(.semibold)).foregroundStyle(Palette.coral)
+                .help(library.status == .avoid ? LibraryStatus.avoid.meaning : "Its health note says it's no longer maintained")
+        } else if let status = library.status {
+            Text(status.title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(statusColor(status))
+                .help(status.meaning)
         }
         if library.verified {
             Label("Verified", systemImage: "checkmark.seal.fill").font(.caption2.weight(.semibold)).foregroundStyle(Palette.jade)
@@ -378,6 +468,16 @@ struct PlaybookView: View {
             Label("Claude's draft", systemImage: "sparkles").font(.caption2.weight(.semibold)).foregroundStyle(Palette.gold)
         } else if !library.isDescribed {
             Text("Not described").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+        }
+    }
+
+    private func statusColor(_ status: LibraryStatus) -> Color {
+        switch status {
+        case .default: return Palette.jade
+        case .narrow: return Palette.gold
+        case .legacy: return .secondary
+        case .candidate: return Palette.violet
+        case .avoid: return Palette.coral
         }
     }
 
@@ -391,10 +491,35 @@ struct PlaybookView: View {
         VStack(alignment: .leading, spacing: 6) {
             field("Name", \.name, id)
             field("Link", \.url, id)
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("Category").font(.callout).frame(width: 96, alignment: .leading)
+                Picker("Category", selection: Binding(
+                    get: { PlaybookCategories.canonical(playbook.libraries.first { $0.id == id }?.category ?? "") },
+                    set: { value in update(id) { $0.category = value } }
+                )) {
+                    Text("Not filed").tag("")
+                    ForEach(categoryChoices(including: playbook.libraries.first { $0.id == id }?.category ?? ""), id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 260, alignment: .leading)
+            }
             field("Task", \.task, id, placeholder: "Toasts, Drawers, UI components…")
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("Status").font(.callout).frame(width: 96, alignment: .leading)
+                Picker("Status", selection: Binding(
+                    get: { playbook.libraries.first { $0.id == id }?.status },
+                    set: { value in update(id) { $0.status = value } }
+                )) {
+                    Text("Not set").tag(LibraryStatus?.none)
+                    ForEach(LibraryStatus.allCases) { Text("\($0.title): \($0.meaning)").tag(LibraryStatus?.some($0)) }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 360, alignment: .leading)
+            }
             field("What it's for", \.purpose, id)
             field("Use when", \.useWhen, id)
             field("Avoid when", \.avoidWhen, id)
+            field("Use instead", \.useInstead, id, placeholder: "For legacy or avoid: what new work should pick")
             field("Install", \.install, id, placeholder: "npm install …")
             field("Works with", \.platforms, id, placeholder: "React, any web stack…")
             field("Health", \.health, id, placeholder: "Maintained? Latest release?")
@@ -416,7 +541,13 @@ struct PlaybookView: View {
             Text(label).font(.callout).frame(width: 96, alignment: .leading)
             TextField(placeholder, text: Binding(
                 get: { playbook.libraries.first { $0.id == id }?[keyPath: keyPath] ?? "" },
-                set: { value in update(id) { $0[keyPath: keyPath] = value } }
+                set: { value in
+                    update(id) { library in
+                        library[keyPath: keyPath] = value
+                        // Writing the health note is checking it.
+                        if keyPath == \PlaybookLibrary.health { library.checkedOn = .now }
+                    }
+                }
             ), axis: .vertical)
             .textFieldStyle(.roundedBorder)
             .lineLimit(1...4)
@@ -848,6 +979,12 @@ struct PlaybookView: View {
         }
     }
 
+    private func updateRule(_ id: UUID, _ change: (inout PlaybookRule) -> Void) {
+        edit { book in
+            if let index = book.rules.firstIndex(where: { $0.id == id }) { change(&book.rules[index]) }
+        }
+    }
+
     private func addPasted() {
         let new = PlaybookImport.libraries(from: addText)
         let before = playbook.libraries.count
@@ -1013,7 +1150,7 @@ private enum PlaybookTab: String, CaseIterable, Identifiable {
     var intro: String {
         switch self {
         case .chat: return "Ask about libraries, your stack or how you work."
-        case .libraries: return "Libraries you trust, by the job they do. AI tools use these instead of writing their own toast, drawer or command menu."
+        case .libraries: return "Libraries you trust, filed by area and the job they do, each with where it stands for new work. AI tools use these instead of writing their own toast, drawer or command menu."
         case .stack: return "What new work should start from. Pick your defaults; existing projects keep what they use."
         case .habits: return "How you like to work, written once so every AI tool knows it. Like memory, but yours to edit. The Chat tab can also learn it from your recent sessions."
         case .storage: return "The playbook lives next to the guide, and a copy goes into the knowledge graph. Keep it on this Mac, or back it up to a private repo."
