@@ -29,7 +29,7 @@ enum GraphIndexError: LocalizedError, Equatable {
 /// Never writes to the graphify output folder.
 final class GraphIndex {
     /// Bump when the schema or the classification rules change, so old indexes get rebuilt.
-    static let schemaVersion = 4
+    static let schemaVersion = 5
 
     let source: GraphSource
     let graphModifiedAt: Date
@@ -155,7 +155,7 @@ final class GraphIndex {
         let queue = try DatabaseQueue(path: temporary, configuration: configuration)
         try queue.write { db in
             try createSchema(db)
-            try insert(graph, scheme: source.scheme, labels: communityLabels(source), into: db)
+            try insert(graph, scheme: source.scheme, labels: communityLabels(source, graph: graph), into: db)
             try db.execute(sql: "INSERT INTO meta(key, value) VALUES ('signature', ?)", arguments: [signature])
         }
         try queue.close()
@@ -165,10 +165,29 @@ final class GraphIndex {
         }
     }
 
-    private static func communityLabels(_ source: GraphSource) -> [Int: String] {
-        guard let data = try? Data(contentsOf: source.labelsURL),
-              let raw = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
-        return Dictionary(uniqueKeysWithValues: raw.compactMap { key, value in Int(key).map { ($0, value) } })
+    /// Names chosen in `.graphify_labels.json` win. A community without one takes the name
+    /// `graph.json` gives it, which graphify makes from its busiest symbol, so it never shows as a number.
+    private static func communityLabels(_ source: GraphSource, graph: RawGraph) -> [Int: String] {
+        var labels: [Int: String] = [:]
+        for node in graph.nodes {
+            guard let community = node.community, labels[community] == nil,
+                  let name = node.communityName, isName(name, of: community) else { continue }
+            labels[community] = name
+        }
+        if let data = try? Data(contentsOf: source.labelsURL),
+           let raw = try? JSONDecoder().decode([String: String].self, from: data) {
+            for (key, value) in raw {
+                guard let community = Int(key), isName(value, of: community) else { continue }
+                labels[community] = value
+            }
+        }
+        return labels
+    }
+
+    /// graphify writes "Community 12" where it has no name, which says no more than the number.
+    private static func isName(_ name: String, of community: Int) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed != "Community \(community)"
     }
 
     private static func createSchema(_ db: Database) throws {

@@ -1,6 +1,7 @@
 // Run with Scripts/test.sh, which covers the fixture checks below.
 // `GraphitreeChecks --real <graphify-out>` prints the overview of a real graph as JSON.
 import Foundation
+import GRDB
 
 /// `DispatchQueue.sync` would stay on the main thread and trip the importer's main-thread guard.
 func onBackgroundQueue<T>(_ body: @escaping () throws -> T) throws -> T {
@@ -494,6 +495,28 @@ try #"{"nodes":[\#(node("z", "z", "work/one/z.ts", community: 0))],"edges":[]}"#
 let changed = try onBackgroundQueue { try GraphIndex.open(source: source, cacheDirectory: cache) }
 check(changed.didImport, "changed graph reimports")
 expectEqual(try changed.overview().nodes, 1, "reimport replaces old data")
+
+// MARK: - Community names
+
+let namesOut = sandbox.appendingPathComponent("names/graphify-out")
+try fileManager.createDirectory(at: namesOut, withIntermediateDirectories: true)
+func namedNode(_ id: String, community: Int, name: String) -> String {
+    #"{"id":"\#(id)","label":"\#(id)","file_type":"code","source_file":"work/one/\#(id).ts","community":\#(community),"community_name":"\#(name)"}"#
+}
+let namedNodes = [
+    namedNode("store", community: 0, name: "CartStore"),
+    namedNode("chosen", community: 1, name: "chosen"),
+    namedNode("bare", community: 2, name: "Community 2"),
+].joined(separator: ",")
+try #"{"nodes":[\#(namedNodes)],"links":[]}"#.write(to: namesOut.appendingPathComponent("graph.json"), atomically: true, encoding: .utf8)
+try #"{"1":"Checkout Flow","2":"Community 2"}"#.write(to: namesOut.appendingPathComponent(".graphify_labels.json"), atomically: true, encoding: .utf8)
+let namesIndex = try onBackgroundQueue { try GraphIndex.open(source: GraphSource(outDirectory: namesOut), cacheDirectory: cache) }
+let communityNames = try namesIndex.queue.read { db in
+    Dictionary(uniqueKeysWithValues: try Row.fetchAll(db, sql: "SELECT id, label FROM communities").map { ($0[0] as Int, $0[1] as String) })
+}
+expectEqual(communityNames[0], "CartStore", "a community with no chosen name takes graphify's stand-in")
+expectEqual(communityNames[1], "Checkout Flow", "a chosen name wins over graphify's stand-in")
+expectEqual(communityNames[2], nil, "\"Community 2\" isn't kept as a name")
 
 // MARK: - Failure handling
 

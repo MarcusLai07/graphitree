@@ -105,9 +105,12 @@ struct RawNode: Decodable {
     let sourceFile: String?
     let sourceLocation: String?
     let community: Int?
+    /// graphify's name for the node's community: a chosen one, or a stand-in named after its busiest symbol.
+    let communityName: String?
 
     private enum CodingKeys: String, CodingKey {
         case id, label, community
+        case communityName = "community_name"
         case normLabel = "norm_label"
         case fileType = "file_type"
         case sourceFile = "source_file"
