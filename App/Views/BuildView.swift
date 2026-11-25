@@ -62,6 +62,8 @@ struct BuildView: View {
     @State private var memoryIsInGraph = false
     @State private var showsMemoryNotes = false
     @State private var memoryError: String?
+    @State private var memoryPlaces: [String: String] = [:]
+    @State private var memoryProjects: [String] = []
     @State private var freshnessError: String?
 
     @AppStorage(BuildChoice.defaultsKey) private var buildChoice = BuildChoice.automatic
@@ -306,7 +308,11 @@ struct BuildView: View {
                         }
                     }
                     if showsMemoryNotes {
-                        MemoryNotesList(plan: memoryPlan, root: root, home: model.agentHome, isOn: model.memoryAddsToGraph)
+                        MemoryNotesList(plan: memoryPlan, root: root, home: model.agentHome, isOn: model.memoryAddsToGraph,
+                                        places: memoryPlaces, projects: memoryProjects) { oldPlace, project in
+                            memoryError = model.setMemoryPlace(oldPlace, to: project)
+                            Task { await refresh() }
+                        }
                             .padding(.leading, 30)
                             .padding(.bottom, 8)
                     }
@@ -354,7 +360,9 @@ struct BuildView: View {
             return "The notes Claude Code keeps from past sessions in each project, such as how a bug was fixed. Turn this on to copy them into \(folder), so a question in one project finds how another one solved it. They can hold personal details: look through them first.\(reader)"
         }
         let left = memoryPlan.leftOut.count + memoryPlan.unmatched.count + memoryPlan.outside.count
-        let skipped = left == 0 ? "" : " Some notes aren't copied: Show lists them."
+        let skipped = left == 0 ? "" : memoryPlan.unmatched.isEmpty
+            ? " Some notes aren't copied: Show lists them."
+            : " Some notes aren't copied. Show lists them, and lets you pick the project for notes from one that moved."
         if memoryIsInGraph {
             return (model.memoryIsNewerThanGraph ? "Copied into \(folder). The graph has older notes until docs are read again." : "Copied into \(folder) and in the graph, so AI tools ask it before researching a problem.") + skipped
         }
@@ -1012,14 +1020,15 @@ struct BuildView: View {
         if readsDocsThisTime { Task { await model.estimateDocs() } }
         allowsSmallerGraph = ignoreChangedSinceBuild
         isInSetup = !model.isSetUp
-        // `-setupStep noise` opens a setup step at launch, and `-buildMode home` skips the setup,
-        // for screenshots and checks. Neither is saved.
+        // `-setupStep noise` opens a setup step at launch, `-buildMode home` skips the setup, and
+        // `-showsMemoryNotes YES` opens the AI memory list, for screenshots and checks. None is saved.
         let defaults = UserDefaults.standard
         if let raw = defaults.string(forKey: "setupStep"), let start = Step.allCases.first(where: { "\($0)" == raw }) {
             beginSetup(at: start)
         } else if defaults.string(forKey: "buildMode") == "home" {
             isInSetup = false
         }
+        if defaults.bool(forKey: "showsMemoryNotes") { showsMemoryNotes = true }
         isLoaded = true
     }
 
@@ -1050,26 +1059,42 @@ struct BuildView: View {
         if model.canCopyMemory {
             if model.memoryAddsToGraph { memoryError = model.refreshMemoryCopy() }
             memoryPlan = model.memoryPlan()
+            memoryPlaces = model.memoryPlaces()
+            memoryProjects = model.memoryProjects()
             memoryIsInGraph = await model.nodeCount(inProject: MemoryCopy.graphFolder) > 0
         }
     }
 }
 
-/// What the AI memory row copies, and what it leaves out and why.
+/// What the AI memory row copies, and what it leaves out and why. Notes from a place that matches
+/// nothing now, such as a project that moved, get a menu to pick the project they're about.
 private struct MemoryNotesList: View {
     let plan: MemoryCopy.Plan
     let root: String
     let home: String
     let isOn: Bool
+    /// The person's picks, by old place.
+    let places: [String: String]
+    let projects: [String]
+    let choose: (_ oldPlace: String, _ project: String?) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             group(isOn ? "Copied" : "Would be copied", plan.copied, emptyName: "The whole folder")
             group("Left out of the graph, so not copied", plan.leftOut)
-            group("Under this folder once, but nothing there matches now, such as a project that moved", plan.unmatched)
+            group("Under this folder once, but nothing there matches now, such as a project that moved. Pick the project each one was, and its notes are copied there.", plan.unmatched)
             group("Sessions outside this folder, such as in your home folder", plan.outside)
         }
         .font(.caption)
+    }
+
+    private struct Row: Identifiable {
+        let name: String
+        let project: String
+        let oldPlace: String
+        let suggestion: String
+        let count: Int
+        var id: String { name + "\n" + oldPlace }
     }
 
     @ViewBuilder
@@ -1077,16 +1102,61 @@ private struct MemoryNotesList: View {
         if !notes.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).foregroundStyle(.secondary)
-                let rows = Dictionary(grouping: notes) { entry in
-                    entry.project.isEmpty && emptyName != nil ? emptyName! : MemoryCopy.displayName(of: entry, root: root, home: home)
-                }
-                .map { (name: $0.key, count: $0.value.reduce(0) { $0 + $1.files.count }) }
-                .sorted { $0.name < $1.name }
-                ForEach(rows, id: \.name) { row in
-                    Text("\(row.name): \(row.count.formatted()) note\(row.count == 1 ? "" : "s")")
+                ForEach(rows(notes, emptyName: emptyName)) { row in
+                    HStack(spacing: 6) {
+                        Text(text(for: row))
+                        // Notes waiting for a project, and ones the person placed, can be (re)placed.
+                        // Ones Graphitree's move log placed follow the folder.
+                        if !row.oldPlace.isEmpty, row.project.isEmpty || places[row.oldPlace] != nil {
+                            placeMenu(for: row)
+                        }
+                    }
                 }
             }
         }
+    }
+
+    private func rows(_ notes: [MemoryCopy.Notes], emptyName: String?) -> [Row] {
+        Dictionary(grouping: notes) { "\($0.project)\n\($0.oldPlace)" }.values.map { entries in
+            let first = entries[0]
+            let name = first.project.isEmpty && first.oldPlace.isEmpty && emptyName != nil ? emptyName! : MemoryCopy.displayName(of: first, root: root, home: home)
+            return Row(name: name, project: first.project, oldPlace: first.oldPlace, suggestion: first.suggestion, count: entries.reduce(0) { $0 + $1.files.count })
+        }
+        .sorted { ($0.name, $0.oldPlace) < ($1.name, $1.oldPlace) }
+    }
+
+    private func text(for row: Row) -> String {
+        let notes = "\(row.count.formatted()) note\(row.count == 1 ? "" : "s")"
+        guard !row.project.isEmpty, !row.oldPlace.isEmpty else { return "\(row.name): \(notes)" }
+        return "\(row.name): \(notes) from its old place, \(row.oldPlace)"
+    }
+
+    private func placeMenu(for row: Row) -> some View {
+        let grouped = Dictionary(grouping: projects.filter { $0.contains("/") }) { String($0.prefix { $0 != "/" }) }
+        let topLevel = projects.filter { !$0.contains("/") }
+        return Menu(row.project.isEmpty ? "Copy Into…" : "Change…") {
+            if places[row.oldPlace] != nil {
+                Button("Don't Copy") { choose(row.oldPlace, nil) }
+                Divider()
+            }
+            if !row.suggestion.isEmpty {
+                Button("\(row.suggestion), the Same Name") { choose(row.oldPlace, row.suggestion) }
+                Divider()
+            }
+            ForEach(grouped.keys.sorted(), id: \.self) { folder in
+                Menu(folder + "/") {
+                    ForEach(grouped[folder] ?? [], id: \.self) { project in
+                        Button((project as NSString).lastPathComponent) { choose(row.oldPlace, project) }
+                    }
+                }
+            }
+            if !grouped.isEmpty, !topLevel.isEmpty { Divider() }
+            ForEach(topLevel, id: \.self) { project in
+                Button(project) { choose(row.oldPlace, project) }
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 }
 

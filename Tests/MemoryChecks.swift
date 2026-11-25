@@ -144,3 +144,92 @@ func memoryChecks() throws {
     let guide = AgentGuide.text(inputs)
     check(guide.contains("## Before you research a problem") && guide.contains("as the `ai-memory` project"), "guide: tells AI tools to ask the graph before researching")
 }
+
+// Notes from a place that matches nothing now: a project moved by hand, one Graphitree moved, and
+// the person's picks. Its own made-up root, so the counts above stay put.
+func memoryMoveChecks() throws {
+    let manager = FileManager.default
+    let base = manager.temporaryDirectory.appendingPathComponent("graphitree-memory-moves-\(UUID().uuidString)")
+    defer { try? manager.removeItem(at: base) }
+    let home = base.appendingPathComponent("home").path
+    let root = base.appendingPathComponent("code").path
+    let out = URL(fileURLWithPath: root).appendingPathComponent("graphify-out")
+
+    func folder(_ relative: String) throws {
+        try manager.createDirectory(atPath: (root as NSString).appendingPathComponent(relative), withIntermediateDirectories: true)
+    }
+    /// A note in Claude Code's memory for sessions that ran in `relative` under the root.
+    func note(_ relative: String, _ file: String, _ text: String) throws {
+        let path = "\(home)/.claude/projects/\(MemoryCopy.folderName(for: "\(root)/\(relative)"))/memory/\(file)"
+        try manager.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try text.write(toFile: path, atomically: true, encoding: .utf8)
+    }
+    func read(_ relative: String) -> String? {
+        try? String(contentsOfFile: MemoryCopy.folderURL(root: root).appendingPathComponent(relative).path, encoding: .utf8)
+    }
+
+    for relative in ["personal/ledger", "personal/shared", "personal/depot", "work/orders", "work/orders-app", "work/shared",
+                     "work/kiln", "docs-site", MemoryCopy.graphFolder, PlaybookFile.graphFolder, "graphify-out"] {
+        try folder(relative)
+    }
+    try "/personal/depot/\n".write(toFile: "\(root)/.graphifyignore", atomically: true, encoding: .utf8)
+    var map = FolderMap()
+    map.folders = [
+        FolderLabel(path: "personal", purpose: .personal, holdsProjects: true),
+        FolderLabel(path: "work", purpose: .work, holdsProjects: true),
+    ]
+    expectEqual(MemoryCopy.projects(root: root, map: map),
+                ["docs-site", "personal/ledger", "personal/shared", "work/kiln", "work/orders", "work/orders-app", "work/shared"],
+                "memory places: projects to pick from leave out Graphitree's folders, graphify's and left-out ones")
+
+    // Old places: the projects used to sit at the top of the root.
+    try note("orders-app", "refunds.md", "Refunds go through the ledger.\n")
+    try note("orders-app/api", "auth.md", "Tokens live for an hour.\n")
+    try note("shared", "naming.md", "Names are plural.\n")
+    try note("depot", "stock.md", "Stock counts nightly.\n")
+    try note("personal/kiln", "glaze.md", "Glaze tests are in the second sheet.\n")
+    let kilnMoved = FolderMove(from: "personal/kiln", to: "work/kiln", at: Date(timeIntervalSince1970: 0))
+
+    var plan = MemoryCopy.plan(root: root, home: home, map: map, moves: [kilnMoved])
+    let offered = Dictionary(uniqueKeysWithValues: plan.unmatched.map { ($0.oldPlace, $0.suggestion) })
+    expectEqual(offered["orders-app"], "work/orders-app", "memory places: a project with the same name is offered, the longest name over work/orders")
+    expectEqual(offered["orders-app-api"], "work/orders-app", "memory places: a session in the old project's subfolder gets the same offer")
+    expectEqual(offered["shared"], "", "memory places: nothing offered when two projects share the name")
+    expectEqual(offered["depot"], "", "memory places: a left-out project isn't offered")
+    let kiln = plan.copied.first { $0.oldPlace == "personal-kiln" }
+    expectEqual(kiln?.project, "work/kiln", "memory places: a folder Graphitree moved takes its notes along, unasked")
+    check(!plan.copied.contains { $0.oldPlace == "orders-app" }, "memory places: an offer isn't copied until it's picked")
+    expectEqual(MemoryCopy.following("personal-kiln-docs", through: [kilnMoved]), "work-kiln-docs", "memory places: a move carries the old project's subfolders")
+    check(MemoryCopy.following("personal-kilns", through: [kilnMoved]) == nil, "memory places: a move doesn't touch a longer name that starts the same")
+
+    // The person's picks.
+    try MemoryCopy.setPlace("orders-app", to: "work/orders-app", in: out)
+    try MemoryCopy.setPlace("shared", to: "personal/shared", in: out)
+    try MemoryCopy.setPlace("depot", to: "personal/gone", in: out)
+    try MemoryCopy.setPlace("orders-app-api", to: "../outside", in: out)
+    expectEqual(MemoryCopy.loadPlaces(from: out)["orders-app"], "work/orders-app", "memory places: picks are saved next to folders.json")
+    plan = MemoryCopy.plan(root: root, home: home, map: map, places: MemoryCopy.loadPlaces(from: out), moves: [kilnMoved])
+    expectEqual(plan.copied.first { $0.oldPlace == "orders-app" }?.project, "work/orders-app", "memory places: a pick copies the notes into that project")
+    expectEqual(plan.copied.first { $0.oldPlace == "shared" }?.project, "personal/shared", "memory places: a pick settles a name two projects share")
+    expectEqual(plan.unmatched.map(\.oldPlace).sorted(), ["depot", "orders-app-api"], "memory places: a pick of a project that's gone, or outside the root, is ignored")
+
+    _ = try MemoryCopy.write(plan, root: root)
+    let refunds = read("work/orders-app/refunds.md") ?? ""
+    check(refunds.contains("sessions in `work/orders-app`, before the project moved here, so paths in it may be out of date"), "memory places: the copy says its paths may be from before the move")
+    check(read("work/kiln/glaze.md")?.contains("before the project moved here") == true, "memory places: so does one Graphitree moved")
+
+    // A picked project that Graphitree moves later: the notes follow it.
+    try manager.moveItem(atPath: "\(root)/personal/shared", toPath: "\(root)/work/common")
+    let sharedMoved = FolderMove(from: "personal/shared", to: "work/common", at: Date(timeIntervalSince1970: 60))
+    plan = MemoryCopy.plan(root: root, home: home, map: map, places: MemoryCopy.loadPlaces(from: out), moves: [kilnMoved, sharedMoved])
+    expectEqual(plan.copied.first { $0.oldPlace == "shared" }?.project, "work/common", "memory places: a pick follows its project when Graphitree moves it")
+
+    // Taking picks away.
+    try MemoryCopy.setPlace("orders-app", to: nil, in: out)
+    plan = MemoryCopy.plan(root: root, home: home, map: map, places: MemoryCopy.loadPlaces(from: out), moves: [kilnMoved, sharedMoved])
+    check(plan.unmatched.contains { $0.oldPlace == "orders-app" }, "memory places: Don't Copy sends the notes back to waiting")
+    _ = try MemoryCopy.write(plan, root: root)
+    check(read("work/orders-app/refunds.md") == nil, "memory places: and their copy goes")
+    for place in ["shared", "depot", "orders-app-api"] { try MemoryCopy.setPlace(place, to: nil, in: out) }
+    check(!manager.fileExists(atPath: out.appendingPathComponent(MemoryCopy.placesFile).path), "memory places: the file goes with the last pick")
+}

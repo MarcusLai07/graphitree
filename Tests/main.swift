@@ -80,7 +80,8 @@ if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--stack" {
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--memory" {
     let root = CommandLine.arguments[2]
     let outDirectory = URL(fileURLWithPath: root).appendingPathComponent("graphify-out")
-    let plan = MemoryCopy.plan(root: root, home: NSHomeDirectory(), map: FolderFile.load(from: outDirectory))
+    let plan = MemoryCopy.plan(root: root, home: NSHomeDirectory(), map: FolderFile.load(from: outDirectory),
+                               places: MemoryCopy.loadPlaces(from: outDirectory), moves: FolderMoves.load(from: outDirectory))
     print("can copy: \(MemoryCopy.canCopy(root: root))")
     print("copied: \(plan.copiedNotes) notes from \(plan.copiedProjects) places")
     for (project, notes) in Dictionary(grouping: plan.copied, by: \.project).sorted(by: { $0.key < $1.key }) {
@@ -88,7 +89,14 @@ if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--memory" {
     }
     for (title, list) in [("left out", plan.leftOut), ("unmatched", plan.unmatched), ("outside the root", plan.outside)] {
         print("\(title): \(list.reduce(0) { $0 + $1.files.count }) notes")
-        for notes in list { print("  \(notes.project.isEmpty ? notes.folderName : notes.project): \(notes.files.count)") }
+        for notes in list {
+            let name = notes.project.isEmpty ? notes.folderName : notes.project
+            let offered = notes.suggestion.isEmpty ? "" : ", offered: \(notes.suggestion)"
+            print("  \(name): \(notes.files.count)\(offered)")
+        }
+    }
+    for notes in plan.copied where !notes.oldPlace.isEmpty {
+        print("moved: \(notes.oldPlace) -> \(notes.project): \(notes.files.count)")
     }
     exit(0)
 }
@@ -2217,6 +2225,7 @@ try arrangeAndBackupChecks()
 try backgroundAndRestoreChecks()
 try moveChecks()
 try memoryChecks()
+try memoryMoveChecks()
 
 // MARK: - AI connections
 

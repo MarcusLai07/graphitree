@@ -667,7 +667,31 @@ final class AppModel {
     }
 
     func memoryPlan() -> MemoryCopy.Plan {
-        MemoryCopy.plan(root: graphRoot, home: agentHome, map: folderMap())
+        MemoryCopy.plan(root: graphRoot, home: agentHome, map: folderMap(), places: memoryPlaces(), moves: FolderMoves.load(from: outDirectory))
+    }
+
+    /// Where the person said notes from a place that moved go, by old place.
+    func memoryPlaces() -> [String: String] {
+        _ = settingsRevision
+        return MemoryCopy.loadPlaces(from: outDirectory)
+    }
+
+    /// The projects such notes can go to.
+    func memoryProjects() -> [String] {
+        MemoryCopy.projects(root: graphRoot, map: folderMap())
+    }
+
+    /// Sends notes from `oldPlace` into `project`, or stops copying them when it's nil, then brings
+    /// the copy in line. Returns an error message or nil.
+    @discardableResult
+    func setMemoryPlace(_ oldPlace: String, to project: String?) -> String? {
+        do {
+            try MemoryCopy.setPlace(oldPlace, to: project, in: outDirectory)
+        } catch {
+            return error.localizedDescription
+        }
+        settingsRevision += 1
+        return refreshMemoryCopy()
     }
 
     /// Brings the copy in line with Claude Code's notes, when it's on. Returns an error message or nil.
