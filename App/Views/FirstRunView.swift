@@ -325,7 +325,7 @@ struct FirstRunView: View {
             if let opened, Self.localProviders.contains(opened), let provider = provider(opened) {
                 form(provider)
             }
-            Text("Codex, Gemini CLI and Copilot build with /graphify inside the tool. Connect them later in AI Models.")
+            Text("Codex, Antigravity, Copilot and other coding tools build with graphify's skill inside the tool. Connect them later in AI Models.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)

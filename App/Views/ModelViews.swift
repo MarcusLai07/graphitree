@@ -39,6 +39,7 @@ struct ModelBrand {
         case "claude-code": return ModelBrand(monogram: "C", background: [Color(hex: 0xD97757)], foreground: .white, apps: ["Claude.app"], logo: "claude-code", logoTile: Color(hex: 0xF0EEE6), logoInset: 0.16)
         case "codex": return ModelBrand(monogram: "Cx", background: [Color(hex: 0x111111)], foreground: .white, apps: ["Codex.app"], logo: "codex", logoTile: .white, logoInset: 0.02)
         case "copilot": return ModelBrand(monogram: "Co", background: [Color(hex: 0x24292F)], foreground: .white, apps: [], logo: "copilot", logoTile: .white, logoInset: 0.2)
+        case "antigravity": return ModelBrand(monogram: "Ag", background: [Color(hex: 0x1A1C20)], foreground: Color(hex: 0x8AB4F8), apps: ["Antigravity.app"])
         case "opencode": return ModelBrand(monogram: "Oc", background: [Color(hex: 0x1C1C1C)], foreground: Color(hex: 0xF2F2F2), apps: [], logo: "opencode")
         case "anthropic": return ModelBrand(monogram: "A", background: [Color(hex: 0xF0EEE6)], foreground: Color(hex: 0x1F1E1D), apps: [], logo: "anthropic")
         case "openai": return ModelBrand(monogram: "O", background: [Color(hex: 0x0B0B0B)], foreground: .white, apps: [], logo: "openai", logoTile: .white, logoInset: 0.02)

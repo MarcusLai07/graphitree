@@ -40,7 +40,7 @@ struct AgentsView: View {
     private var python: String { model.graphifyPython ?? "python3" }
 
     private var presentChats: [ChatApp] { AICatalog.chatApps.filter { chatStates[$0.id]?.isInstalled ?? true } }
-    private var missingChats: [ChatApp] { AICatalog.chatApps.filter { chatStates[$0.id]?.isInstalled == false } }
+    private var missingChats: [ChatApp] { AICatalog.chatApps.filter { chatStates[$0.id]?.isInstalled == false && !$0.isRetired } }
 
     private var builderID: String? { BuildChoice.resolve(buildChoice, options: model.aiOptions.map(\.id)) }
 
@@ -860,7 +860,7 @@ struct AgentsView: View {
                 }
             }
             otherWay(
-                title: "Editors with a rules box (Cursor, Windsurf, Zed)",
+                title: "Editors with a rules box (Cursor, Devin Desktop, Zed)",
                 detail: "Paste the pointer into the user or global rules setting.",
                 button: "Copy Pointer"
             ) {

@@ -97,6 +97,9 @@ struct ChatApp: Identifiable, Hashable, Sendable {
     /// The MCP settings file, from the home folder.
     let configPath: String
     let format: Format
+    /// An app that was replaced. It still shows where it's installed, and uninstalling still
+    /// cleans its settings, but it isn't offered on a Mac without it.
+    var isRetired = false
 
     func configFile(home: String) -> String { home + "/" + configPath }
 }
@@ -125,6 +128,8 @@ enum AICatalog {
             platform: "codex",
             commands: ["codex"],
             apps: ["Codex.app"],
+            // graphify still installs here. Codex now prefers ~/.agents/skills, but keeps reading
+            // this folder for older installs, so the two agree until graphify moves.
             skillPath: ".codex/skills/graphify/SKILL.md",
             instructionsPath: ".codex/AGENTS.md",
             installerAlsoChanges: nil,
@@ -134,7 +139,8 @@ enum AICatalog {
         CodingTool(
             id: "gemini",
             name: "Gemini CLI",
-            account: "A Google account (free tier), or a Gemini API key",
+            // Since 18 June 2026, personal Google accounts, AI Pro and Ultra included, use Antigravity.
+            account: "Gemini Code Assist Standard or Enterprise, or a Gemini API key",
             platform: "gemini",
             commands: ["gemini"],
             apps: [],
@@ -142,6 +148,20 @@ enum AICatalog {
             instructionsPath: ".gemini/GEMINI.md",
             installerAlsoChanges: nil,
             buildHint: "Type /graphify in Gemini CLI.",
+            graphitreeBackend: nil
+        ),
+        CodingTool(
+            id: "antigravity",
+            name: "Antigravity",
+            account: "A Google account, including Google AI Pro and Ultra",
+            platform: "antigravity",
+            commands: ["agy"],
+            apps: ["Antigravity.app"],
+            // The app and the `agy` CLI share ~/.gemini/config for skills, rules and MCP settings.
+            skillPath: ".gemini/config/skills/graphify/SKILL.md",
+            instructionsPath: ".gemini/config/AGENTS.md",
+            installerAlsoChanges: nil,
+            buildHint: "Ask Antigravity to use the graphify skill on a folder.",
             graphitreeBackend: nil
         ),
         CodingTool(
@@ -186,7 +206,6 @@ enum AICatalog {
         OtherSkillTool(name: "Pi", platform: "pi"),
         OtherSkillTool(name: "CodeBuddy", platform: "codebuddy"),
         OtherSkillTool(name: "Devin CLI", platform: "devin"),
-        OtherSkillTool(name: "Google Antigravity", platform: "antigravity"),
         OtherSkillTool(name: "Any Agent Skills tool", platform: "agents"),
     ]
 
@@ -273,9 +292,15 @@ enum AICatalog {
             apps: ["Cursor.app"], configPath: ".cursor/mcp.json", format: .mcpServers
         ),
         ChatApp(
+            id: "devin", name: "Devin Desktop",
+            detail: "Devin Local, the agent that replaced Windsurf's Cascade.",
+            apps: ["Devin.app"], configPath: ".config/devin/mcp_config.json", format: .mcpServers
+        ),
+        ChatApp(
             id: "windsurf", name: "Windsurf",
-            detail: "Windsurf's Cascade agent.",
-            apps: ["Windsurf.app"], configPath: ".codeium/windsurf/mcp_config.json", format: .mcpServers
+            detail: "Windsurf's Cascade agent. Windsurf became Devin Desktop in June 2026.",
+            apps: ["Windsurf.app"], configPath: ".codeium/windsurf/mcp_config.json", format: .mcpServers,
+            isRetired: true
         ),
         ChatApp(
             id: "vscode", name: "VS Code (Copilot Chat)",

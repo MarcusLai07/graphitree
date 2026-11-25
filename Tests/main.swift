@@ -994,6 +994,12 @@ let graphifyBackends: Set<String> = ["claude", "kimi", "ollama", "gemini", "open
 check(AICatalog.providers.allSatisfy { graphifyBackends.contains($0.backend) }, "every provider is a graphify backend")
 check(AICatalog.codingTools.allSatisfy { !$0.skillPath.isEmpty && !$0.instructionsPath.isEmpty }, "every coding tool can both build and read")
 expectEqual(Set(AICatalog.codingTools.map(\.id)).count, AICatalog.codingTools.count, "coding tool ids are unique")
+// Connecting writes Graphitree's lines into a tool's own file, and disconnecting takes them out,
+// so two tools sharing a file would undo each other.
+expectEqual(Set(AICatalog.codingTools.map(\.instructionsPath)).count, AICatalog.codingTools.count, "no two coding tools share an instructions file")
+expectEqual(Set(AICatalog.codingTools.map(\.skillPath)).count, AICatalog.codingTools.count, "no two coding tools share graphify's skill")
+check(Set(AICatalog.codingTools.map(\.platform)).isDisjoint(with: AICatalog.otherSkillTools.map(\.platform)), "a tool Graphitree sets up isn't also listed as one it doesn't")
+expectEqual(Set(AICatalog.chatApps.map(\.configPath)).count, AICatalog.chatApps.count, "no two chat apps share an MCP settings file")
 expectEqual(Set(AICatalog.providers.map(\.id)).count, AICatalog.providers.count, "provider ids are unique")
 expectEqual(AICatalog.codingTools.compactMap(\.graphitreeBackend), ["claude-cli"], "only Claude Code's sign-in can be driven by Graphitree")
 
