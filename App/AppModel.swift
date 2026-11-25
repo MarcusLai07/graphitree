@@ -655,6 +655,52 @@ final class AppModel {
         return PlaybookFile.graphCopyIsNewer(than: builtAt, root: graphRoot)
     }
 
+    // MARK: - Claude Code's memory
+
+    /// Only for a root that holds projects, never inside one repo.
+    var canCopyMemory: Bool { MemoryCopy.canCopy(root: graphRoot) }
+
+    /// Whether a copy of Claude Code's memory sits under the graph's root, where graphify's docs pass reads it.
+    var memoryAddsToGraph: Bool {
+        _ = settingsRevision
+        return canCopyMemory && MemoryCopy.isOn()
+    }
+
+    func memoryPlan() -> MemoryCopy.Plan {
+        MemoryCopy.plan(root: graphRoot, home: agentHome, map: folderMap())
+    }
+
+    /// Brings the copy in line with Claude Code's notes, when it's on. Returns an error message or nil.
+    @discardableResult
+    func refreshMemoryCopy() -> String? {
+        guard memoryAddsToGraph else { return nil }
+        do {
+            try MemoryCopy.write(memoryPlan(), root: graphRoot)
+        } catch {
+            return error.localizedDescription
+        }
+        return nil
+    }
+
+    /// Turning it off takes Graphitree's copies away. The graph keeps their nodes until a rebuild
+    /// that allows a smaller graph.
+    @discardableResult
+    func setMemoryAddsToGraph(_ adds: Bool) -> String? {
+        UserDefaults.standard.set(adds, forKey: MemoryCopy.defaultsKey)
+        settingsRevision += 1
+        guard adds else {
+            MemoryCopy.remove(root: graphRoot)
+            return nil
+        }
+        return refreshMemoryCopy()
+    }
+
+    /// A copy changed after the graph was built, so a docs rebuild would bring it in.
+    var memoryIsNewerThanGraph: Bool {
+        guard memoryAddsToGraph, let builtAt = snapshot?.overview.builtAt else { return false }
+        return MemoryCopy.isNewer(than: builtAt, root: graphRoot)
+    }
+
     // MARK: - Setup
 
     /// Reads the saved record; `settingsRevision` makes views that ask notice when it changes.
@@ -947,6 +993,10 @@ final class AppModel {
         rebuildLog = ""
         rebuildResult = nil
         pendingChangeAt = nil
+        // Claude Code adds notes between rebuilds, so the copy catches up first.
+        if let problem = refreshMemoryCopy() {
+            appendRebuildLog("Couldn't update the copy of Claude Code's memory: \(problem)\n")
+        }
         if let docs {
             // A sign-in or key that stopped working shows up while the rebuild runs, not after.
             if let builder = builderID { Task { await checkConnections([builder]) } }

@@ -168,6 +168,7 @@ final class Workspace: @unchecked Sendable {
         }
         let hasPlaybook = FileManager.default.fileExists(atPath: playbookMarkdownPath)
         let playbookNodes = hasPlaybook ? ((try? index.nodeCount(inProject: PlaybookFile.graphFolder)) ?? 0) : 0
+        let memoryNodes = (try? index.nodeCount(inProject: MemoryCopy.graphFolder)) ?? 0
         return AgentGuide.text(AgentGuide.Inputs(
             root: source.rootPath,
             graphPath: isClean ? cleanURL.path : source.graphURL.path,
@@ -182,6 +183,7 @@ final class Workspace: @unchecked Sendable {
             playbookPath: hasPlaybook ? playbookMarkdownPath : nil,
             playbookSummary: hasPlaybook ? PlaybookFile.guideSummary(PlaybookFile.load(from: source.outDirectory)) : [],
             playbookProject: playbookNodes > 0 ? PlaybookFile.graphFolder : nil,
+            memoryProject: memoryNodes > 0 ? MemoryCopy.graphFolder : nil,
             folders: guideFolders(),
             graphs: GraphCuts.load(from: source.outDirectory).compactMap { cut in
                 let url = GraphCuts.url(of: cut, outDirectory: source.outDirectory)

@@ -75,6 +75,8 @@ A downloaded copy is removed from wherever it is, Downloads included. The disk i
 | `~/Library/Application Support/Graphitree/ClaudeUsage` | The app | The last plan reading, a reading every 5 minutes while the app runs (`usage-history.jsonl`), and a disposable transcript cache. |
 | `~/Library/Group Containers/<team>.com.marcuslai.Graphitree/widget-feed.json` | The app | The latest readings, for the desktop widgets, rewritten after each reading. The widgets only read it. |
 | `~/Library/LaunchAgents/com.marcuslai.Graphitree.menubar.plist` | The app | Only with Open at login on. Starts Graphitree in the menu bar when you log in. |
+| `~/.claude/projects/*/memory/*.md` | Claude Code | Read only, and only with AI memory on in Build. The notes Claude Code keeps from past sessions in each project. |
+| `ai-memory/` under the graph's folder | The app | Only with AI memory on. A copy of those notes, laid out by project, where graphify's docs pass reads them. Notes from folders left out of the graph aren't copied. Rewritten when the notes change and before each rebuild, and removed when you turn it off. Files without Graphitree's first line are never touched. |
 
 To query the cleaned graph: `graphify query "<question>" --graph graphify-out/graph.clean.json`
 

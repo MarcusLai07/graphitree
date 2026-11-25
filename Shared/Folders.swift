@@ -450,6 +450,9 @@ enum FolderScan {
         if folder.path == PlaybookFile.graphFolder, folder.repo == nil, folder.children.isEmpty {
             return FolderLabel(path: folder.path, purpose: .notes, name: "Playbook", note: "Graphitree's copy of the owner's playbook, so graph questions find their library picks and stack")
         }
+        if folder.path == MemoryCopy.graphFolder, folder.repo == nil {
+            return FolderLabel(path: folder.path, purpose: .notes, name: "AI memory", note: "Graphitree's copy of the notes Claude Code keeps from past sessions in each project, so graph questions find how a problem was solved before")
+        }
         let purpose: FolderPurpose
         if ["work", "job", "company", "office", "employer"].contains(name) {
             purpose = .work

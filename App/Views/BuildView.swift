@@ -58,6 +58,10 @@ struct BuildView: View {
     @State private var showsCleanupRules = false
     @State private var playbookLibraries = 0
     @State private var playbookIsInGraph = false
+    @State private var memoryPlan = MemoryCopy.Plan()
+    @State private var memoryIsInGraph = false
+    @State private var showsMemoryNotes = false
+    @State private var memoryError: String?
     @State private var freshnessError: String?
 
     @AppStorage(BuildChoice.defaultsKey) private var buildChoice = BuildChoice.automatic
@@ -152,6 +156,13 @@ struct BuildView: View {
             if readsDocsThisTime, let docs { estimateLine(docs).padding(.leading, 20) }
             if model.playbookIsNewerThanGraph {
                 Label("Your playbook changed after this build. Reading docs brings the new version into the graph.", systemImage: "books.vertical")
+                    .font(.caption)
+                    .foregroundStyle(Palette.gold)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 20)
+            }
+            if model.memoryIsNewerThanGraph {
+                Label("Claude Code has notes the graph doesn't have yet. Reading docs brings them in.", systemImage: "brain")
                     .font(.caption)
                     .foregroundStyle(Palette.gold)
                     .fixedSize(horizontal: false, vertical: true)
@@ -277,6 +288,29 @@ struct BuildView: View {
                 settingRow("books.vertical", "Playbook", value: "\(playbookLibraries.formatted()) librar\(playbookLibraries == 1 ? "y" : "ies")", detail: playbookDetail, change: nil) {
                     Button("Open", action: openPlaybook).buttonStyle(SoftButtonStyle())
                 }
+                if model.canCopyMemory {
+                    divider
+                    settingRow("brain", "AI memory", value: memoryValue, detail: memoryDetail, change: nil) {
+                        HStack(spacing: 8) {
+                            Button(showsMemoryNotes ? "Hide" : "Show") { showsMemoryNotes.toggle() }
+                                .buttonStyle(SoftButtonStyle())
+                                .disabled(memoryPlan == MemoryCopy.Plan())
+                            Toggle("Copy Claude Code's memory", isOn: Binding(get: { model.memoryAddsToGraph }, set: { adds in
+                                memoryError = model.setMemoryAddsToGraph(adds)
+                                Task { await refresh() }
+                            }))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .controlSize(.small)
+                            .disabled(model.isRebuilding)
+                        }
+                    }
+                    if showsMemoryNotes {
+                        MemoryNotesList(plan: memoryPlan, root: root, home: model.agentHome, isOn: model.memoryAddsToGraph)
+                            .padding(.leading, 30)
+                            .padding(.bottom, 8)
+                    }
+                }
             }
             .modifier(RowCard())
         }
@@ -303,6 +337,28 @@ struct BuildView: View {
         if !model.playbookAddsToGraph { return "Its picks are in the guide. It isn't added to the graph." }
         if playbookIsInGraph { return model.playbookIsNewerThanGraph ? "In the guide and the graph. The graph has an older version until docs are read again." : "In the guide and in the graph, so graph questions that name a library return its entry." }
         return "In the guide. It reaches the graph on the next rebuild that reads docs."
+    }
+
+    private var memoryValue: String {
+        guard model.memoryAddsToGraph else { return "Off" }
+        let notes = memoryPlan.copiedNotes
+        let places = memoryPlan.copiedProjects
+        return "\(notes.formatted()) note\(notes == 1 ? "" : "s") from \(places.formatted()) project\(places == 1 ? "" : "s")"
+    }
+
+    private var memoryDetail: String {
+        if let memoryError { return "Couldn't update the copy: \(memoryError)" }
+        let folder = AgentGuide.abbreviate(MemoryCopy.folderURL(root: root).path)
+        guard model.memoryAddsToGraph else {
+            let reader = docs.map { " The docs pass sends them to \($0.name), like any other doc." } ?? ""
+            return "The notes Claude Code keeps from past sessions in each project, such as how a bug was fixed. Turn this on to copy them into \(folder), so a question in one project finds how another one solved it. They can hold personal details: look through them first.\(reader)"
+        }
+        let left = memoryPlan.leftOut.count + memoryPlan.unmatched.count + memoryPlan.outside.count
+        let skipped = left == 0 ? "" : " Some notes aren't copied: Show lists them."
+        if memoryIsInGraph {
+            return (model.memoryIsNewerThanGraph ? "Copied into \(folder). The graph has older notes until docs are read again." : "Copied into \(folder) and in the graph, so AI tools ask it before researching a problem.") + skipped
+        }
+        return "Copied into \(folder). It reaches the graph on the next rebuild that reads docs." + skipped
     }
 
     private func settingRow(_ symbol: String, _ title: String, value: String, detail: String, change: Step?) -> some View {
@@ -952,7 +1008,7 @@ struct BuildView: View {
         }
         await reloadFiles()
         await refresh()
-        readsDocsThisTime = readsDocs || model.playbookIsNewerThanGraph
+        readsDocsThisTime = readsDocs || model.playbookIsNewerThanGraph || model.memoryIsNewerThanGraph
         if readsDocsThisTime { Task { await model.estimateDocs() } }
         allowsSmallerGraph = ignoreChangedSinceBuild
         isInSetup = !model.isSetUp
@@ -991,6 +1047,46 @@ struct BuildView: View {
         settings = model.graphSettings()
         playbookLibraries = model.loadPlaybook().libraries.count
         playbookIsInGraph = await model.nodeCount(inProject: PlaybookFile.graphFolder) > 0
+        if model.canCopyMemory {
+            if model.memoryAddsToGraph { memoryError = model.refreshMemoryCopy() }
+            memoryPlan = model.memoryPlan()
+            memoryIsInGraph = await model.nodeCount(inProject: MemoryCopy.graphFolder) > 0
+        }
+    }
+}
+
+/// What the AI memory row copies, and what it leaves out and why.
+private struct MemoryNotesList: View {
+    let plan: MemoryCopy.Plan
+    let root: String
+    let home: String
+    let isOn: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            group(isOn ? "Copied" : "Would be copied", plan.copied, emptyName: "The whole folder")
+            group("Left out of the graph, so not copied", plan.leftOut)
+            group("Under this folder once, but nothing there matches now, such as a project that moved", plan.unmatched)
+            group("Sessions outside this folder, such as in your home folder", plan.outside)
+        }
+        .font(.caption)
+    }
+
+    @ViewBuilder
+    private func group(_ title: String, _ notes: [MemoryCopy.Notes], emptyName: String? = nil) -> some View {
+        if !notes.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).foregroundStyle(.secondary)
+                let rows = Dictionary(grouping: notes) { entry in
+                    entry.project.isEmpty && emptyName != nil ? emptyName! : MemoryCopy.displayName(of: entry, root: root, home: home)
+                }
+                .map { (name: $0.key, count: $0.value.reduce(0) { $0 + $1.files.count }) }
+                .sorted { $0.name < $1.name }
+                ForEach(rows, id: \.name) { row in
+                    Text("\(row.name): \(row.count.formatted()) note\(row.count == 1 ? "" : "s")")
+                }
+            }
+        }
     }
 }
 

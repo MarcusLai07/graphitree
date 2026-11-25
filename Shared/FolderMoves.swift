@@ -152,6 +152,7 @@ enum FolderMoves {
             found.append("\(request.item)/ holds projects. Graphitree moves one project at a time.")
         }
         if request.item == PlaybookFile.graphFolder { found.append("This is Graphitree's copy of your playbook.") }
+        if request.item == MemoryCopy.graphFolder { found.append("This is Graphitree's copy of Claude Code's memory.") }
         guard fileManager.fileExists(atPath: parent, isDirectory: &isDirectory), isDirectory.boolValue else {
             return found + ["\(request.newParent.isEmpty ? "The root" : request.newParent + "/") isn't there."]
         }
