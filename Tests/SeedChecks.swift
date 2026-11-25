@@ -26,8 +26,9 @@ func seedChecks() throws {
     }
 
     // The made-up root: kiln has nothing, ledger has its own CLAUDE.md, sketch isn't a repo,
-    // depot is in a shared folder, and studio's main folder has no label.
-    for name in ["personal/kiln", "personal/ledger", "work/depot", "studio"] { try repo(name) }
+    // depot and quarry are in a shared folder (depot with skills of its own), and studio's main
+    // folder has no label.
+    for name in ["personal/kiln", "personal/ledger", "work/depot", "work/quarry", "studio"] { try repo(name) }
     try manager.createDirectory(atPath: root + "/personal/sketch", withIntermediateDirectories: true)
     try write("personal/ledger/CLAUDE.md", "# ledger\n")
     try write("personal/ledger/.claude/skills/deploy/SKILL.md", "---\nname: deploy\ndescription: \"Ships ledger to the \\\"staging\\\" box\"\n---\n\nRun the deploy script.\n")
@@ -43,7 +44,10 @@ func seedChecks() throws {
     expectEqual(survey.repos.map(\.path), ["personal/kiln", "personal/ledger"], "starters: only git repos in folders that can get one are listed")
     expectEqual(survey.offers.map(\.path), ["personal/kiln"], "starters: a repo with nothing of its own is offered one, even with an empty skills folder")
     expectEqual(survey.repos.last?.state, .ownSetup(["CLAUDE.md", ".claude/skills"]), "starters: a CLAUDE.md or skills Graphitree didn't write mean the repo's own setup")
-    expectEqual(survey.shared, ["work/depot"], "starters: a shared folder's repos are never offered one")
+    expectEqual(survey.shared.map(\.path), ["work/depot", "work/quarry"], "starters: a shared folder's repos are listed apart from the others")
+    expectEqual(survey.shared.first?.state, .ownSetup([".agents/skills"]), "starters: a shared folder's repo with its own setup is left alone")
+    expectEqual(survey.sharedOffers.map(\.path), ["work/quarry"], "starters: a shared folder's repo with nothing of its own can get one, but isn't counted as an offer")
+    check(survey.sharedOffers.first?.isNew == false, "starters: a shared folder's repo is never marked new")
     expectEqual(survey.unlabelled, ["studio"], "starters: a main folder with no label isn't offered one")
     expectEqual(Seeds.survey(root: root, map: nil, book: Seeds.Book(), moves: []).repos, [], "starters: nothing is offered before folders are labelled")
 
@@ -191,6 +195,16 @@ func seedChecks() throws {
     let adopted = Seeds.adopt(found.last!)
     check(adopted.drafted && adopted.body.isEmpty && adopted.description.isEmpty && adopted.source == "a shared folder", "found skills: from a shared folder only the name comes over")
     expectEqual(Seeds.adopt(found.first!).body, "Run the deploy script.", "found skills: a personal repo's comes over as a draft")
+
+    // A shared folder's repo, seeded by hand: its own folder's stack, no personal-only skills.
+    let quarry = Seeds.survey(root: root, map: map, book: Seeds.load(from: out), moves: []).sharedOffers[0]
+    let quarryItems = Seeds.starter(for: quarry.path, root: root, purpose: quarry.purpose, playbook: playbook, tools: [Seeds.claudeCode], date: date)
+    check(!quarryItems.contains { $0.path.contains("mac-icons") } && quarryItems.contains { $0.path.contains("release-notes") }, "shared: a skill for personal repos only stays out, one for every repo goes in")
+    check(Seeds.agentsText(playbook: playbook, folder: quarry.folder, date: date).contains("**Web framework:** Vue"), "shared: the starter has that folder's stack")
+    _ = try Seeds.write(quarryItems, project: quarry.path, folder: quarry.folder, tools: [Seeds.claudeCode], root: root, outDirectory: out, now: date)
+    survey = Seeds.survey(root: root, map: map, book: Seeds.load(from: out), moves: [])
+    check(survey.shared.contains { if case .seeded = $0.state { return $0.path == "work/quarry" } else { return false } } && survey.sharedOffers.isEmpty, "shared: once written, it counts as seeded")
+    expectEqual(Seeds.foundSkills(root: root, map: map, book: Seeds.load(from: out), moves: []).map(\.id), ["personal/ledger/deploy", "work/depot/ship"], "shared: its seeded skills aren't found as the repo's own")
 
     // The chat can draft a skill, saved as a draft.
     let reply = PlaybookChat.reply(from: ["reply": "Here.", "skills": [["name": "Test Runner", "description": "Runs the tests.", "body": "Run them.", "reason": "Asked"]]])

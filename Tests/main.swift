@@ -124,7 +124,14 @@ if (3...4).contains(CommandLine.arguments.count), CommandLine.arguments[1] == "-
         case .skipped: print("skipped: \(repo.path)")
         }
     }
-    print("shared, harvest only: \(survey.shared.count)")
+    for repo in survey.shared {
+        switch repo.state {
+        case .notSetUp: print("shared, by hand only: \(repo.path)")
+        case .ownSetup: print("shared, own setup: \(repo.path)")
+        case .seeded(let record): print("shared, seeded: \(repo.path) on \(PlaybookFile.day(record.seededAt))")
+        case .skipped: print("shared, skipped: \(repo.path)")
+        }
+    }
     print("no label: \(survey.unlabelled.joined(separator: ", "))")
     print("skills found in repos: \(Seeds.foundSkills(root: root, map: FolderFile.load(from: outDirectory), book: book, moves: []).filter { !$0.isShared }.map(\.id).joined(separator: ", "))")
     exit(0)
