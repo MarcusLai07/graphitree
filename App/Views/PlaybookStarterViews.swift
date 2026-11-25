@@ -265,6 +265,7 @@ struct PlaybookStartersTab: View {
                     .font(.callout).foregroundStyle(.secondary)
             } else {
                 group("Can get a starter", detail: "No instructions or skills of their own yet.", repos: survey.offers) { offerRow($0) }
+                group("In shared folders", detail: "Nothing of their own yet. Colleagues see whatever you commit here.", repos: survey.sharedOffers) { offerRow($0) }
                 group("Seeded", detail: "Graphitree wrote their starter once and won't touch it again.", repos: seeded) { seededRow($0) }
                 group("Their own setup", detail: "Left alone.", repos: own) { ownRow($0) }
                 group("Skipped", detail: "", repos: skipped) { skippedRow($0) }
@@ -282,9 +283,16 @@ struct PlaybookStartersTab: View {
         }
     }
 
-    private var seeded: [Seeds.Repo] { survey.repos.filter { if case .seeded = $0.state { return true } else { return false } } }
-    private var own: [Seeds.Repo] { survey.repos.filter { if case .ownSetup = $0.state { return true } else { return false } } }
-    private var skipped: [Seeds.Repo] { survey.repos.filter { $0.state == .skipped } }
+    /// Every repo, shared folders' included, in path order.
+    private var all: [Seeds.Repo] { (survey.repos + survey.shared).sorted { $0.path < $1.path } }
+    private var seeded: [Seeds.Repo] { all.filter { if case .seeded = $0.state { return true } else { return false } } }
+    /// Shared folders' repos with their own setup are only counted in the footer.
+    private var own: [Seeds.Repo] { survey.repos.filter(hasOwnSetup) }
+    private var skipped: [Seeds.Repo] { all.filter { $0.state == .skipped } }
+
+    private func hasOwnSetup(_ repo: Seeds.Repo) -> Bool {
+        if case .ownSetup = repo.state { return true } else { return false }
+    }
 
     private func reload() {
         survey = model.starterSurvey()
@@ -376,8 +384,9 @@ struct PlaybookStartersTab: View {
 
     @ViewBuilder
     private var footer: some View {
+        let sharedOwn = survey.shared.filter(hasOwnSetup).count
         let notes = [
-            survey.shared.isEmpty ? nil : "\(survey.shared.count) repo\(survey.shared.count == 1 ? " is" : "s are") in shared folders (Work, Client): read into the knowledge base, never given a starter.",
+            sharedOwn == 0 ? nil : "\(sharedOwn) repo\(sharedOwn == 1 ? "" : "s") in shared folders (Work, Client) \(sharedOwn == 1 ? "has" : "have") a setup of \(sharedOwn == 1 ? "its" : "their") own: read into the knowledge base, left alone.",
             survey.unlabelled.isEmpty ? nil : "\(survey.unlabelled.count) repo\(survey.unlabelled.count == 1 ? " is" : "s are") in folders with no label yet. Label them in Folders to see them here.",
         ].compactMap { $0 }
         ForEach(notes, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
@@ -438,6 +447,16 @@ private struct StarterPreview: View {
             Text("Starter for \(repo.path)").font(.title3.weight(.semibold))
             Text("Written once and never changed by Graphitree again. Nothing that's already there is touched, and nothing is committed. If this repo is public, these files will be too once you commit them.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if repo.purpose?.isShared == true {
+                Label {
+                    Text("\(repo.folder) is a shared folder (\(repo.purpose?.title ?? "")). Once you commit these files, everyone with access to this repo sees them: your rules, your stack for \(repo.folder), and the lines about asking your knowledge base, which only work where Graphitree is installed. Read AGENTS.md first, and after writing, take out anything that shouldn't be there before you commit.")
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "person.2")
+                }
+                .font(.callout)
+                .foregroundStyle(Palette.gold)
+            }
             List(items, selection: $shown) { item in
                 HStack(spacing: 8) {
                     Image(systemName: icon(item)).foregroundStyle(item.isTaken ? Color.secondary : Palette.gold).frame(width: 16)
@@ -466,7 +485,7 @@ private struct StarterPreview: View {
             }
         }
         .padding(20)
-        .frame(width: 640, height: 600)
+        .frame(width: 640, height: repo.purpose?.isShared == true ? 680 : 600)
     }
 
     private func icon(_ item: Seeds.Item) -> String {

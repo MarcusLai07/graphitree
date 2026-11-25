@@ -108,12 +108,15 @@ enum Seeds {
     struct Survey: Equatable, Sendable {
         /// Repos in folders that can get a starter, in path order.
         var repos: [Repo] = []
-        /// Repos in shared folders (Work, Client), harvested but never offered one.
-        var shared: [String] = []
+        /// Repos in shared folders (Work, Client), in path order. Kept apart from the others: a
+        /// starter there would be committed where colleagues see it, so they're never counted
+        /// as offers or marked new, and the person previews one only if they mean to.
+        var shared: [Repo] = []
         /// Repos whose main folder has no label yet, so it can't be told whether they're shared.
         var unlabelled: [String] = []
 
         var offers: [Repo] { repos.filter { $0.state == .notSetUp } }
+        var sharedOffers: [Repo] { shared.filter { $0.state == .notSetUp } }
     }
 
     /// Files and folders that mean a repo already has a setup of its own: instructions files any
@@ -133,9 +136,10 @@ enum Seeds {
         }
     }
 
-    /// Whether a label's repos can get a starter: not a shared folder, not notes, not someone else's code or the archive.
+    /// Whether a label's repos can get a starter at all: not notes, not someone else's code or the
+    /// archive. Shared folders' repos can, but are listed apart (see `Survey.shared`).
     static func canSeed(_ purpose: FolderPurpose) -> Bool {
-        !purpose.isShared && !purpose.isDocs && purpose.id != FolderPurpose.reference.id && purpose.id != FolderPurpose.archive.id
+        !purpose.isDocs && purpose.id != FolderPurpose.reference.id && purpose.id != FolderPurpose.archive.id
     }
 
     /// Every git repo among the graph's projects, with its state. Only a root that holds several
@@ -154,10 +158,6 @@ enum Seeds {
                 survey.unlabelled.append(project)
                 continue
             }
-            if purpose.isShared {
-                survey.shared.append(project)
-                continue
-            }
             guard canSeed(purpose) else { continue }
             let state: State
             if let found = record(for: project, in: book, moves: moves) {
@@ -169,8 +169,9 @@ enum Seeds {
                 state = own.isEmpty ? .notSetUp : .ownSetup(own)
             }
             let made = (try? FileManager.default.attributesOfItem(atPath: (full as NSString).appendingPathComponent(".git")))?[.creationDate] as? Date
-            let isNew = state == .notSetUp && made.map { now.timeIntervalSince($0) < newFor } == true
-            survey.repos.append(Repo(path: project, folder: folder, purpose: purpose, state: state, isNew: isNew))
+            let isNew = !purpose.isShared && state == .notSetUp && made.map { now.timeIntervalSince($0) < newFor } == true
+            let repo = Repo(path: project, folder: folder, purpose: purpose, state: state, isNew: isNew)
+            if purpose.isShared { survey.shared.append(repo) } else { survey.repos.append(repo) }
         }
         return survey
     }
