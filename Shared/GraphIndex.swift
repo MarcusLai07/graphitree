@@ -384,6 +384,22 @@ final class GraphIndex {
     }
 
     /// Rules that no longer point at anything, usually because a file moved or a rebuild changed IDs.
+    /// Each node's file and starting line, for the files given, relative to the root.
+    func nodeLines(inFiles paths: Set<String>) throws -> [(id: String, path: String, location: String?)] {
+        guard !paths.isEmpty else { return [] }
+        return try queue.read { db in
+            var result: [(id: String, path: String, location: String?)] = []
+            let list = Array(paths)
+            for start in stride(from: 0, to: list.count, by: 400) {
+                let chunk = Array(list[start..<min(start + 400, list.count)])
+                let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                let rows = try Row.fetchAll(db, sql: "SELECT id, source_file, source_location FROM nodes WHERE source_file IN (\(marks))", arguments: StatementArguments(chunk))
+                result += rows.map { (id: $0[0], path: $0[1], location: $0[2]) }
+            }
+            return result
+        }
+    }
+
     func orphanedRules(_ rules: RuleSet) throws -> Set<String> {
         try queue.read { db in
             let nodes = Set(try String.fetchAll(db, sql: "SELECT id FROM nodes"))

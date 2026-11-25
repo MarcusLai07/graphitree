@@ -50,6 +50,7 @@ final class Workspace: @unchecked Sendable {
         index = try GraphIndex.open(source: source, cacheDirectory: cacheDirectory, progress: progress)
         log = try CurationLog(url: source.outDirectory.appendingPathComponent("curation.jsonl"))
         rules = RuleSet(entries: log.entries)
+        rules.seedNodes = seedTextNodes()
         progress(.summarising)
         effects = try index.apply(rules)
     }
@@ -77,8 +78,19 @@ final class Workspace: @unchecked Sendable {
 
     private func refreshRules() throws -> WorkspaceSnapshot {
         rules = RuleSet(entries: log.entries)
+        rules.seedNodes = seedTextNodes()
         effects = try index.apply(rules)
         return try snapshot()
+    }
+
+    /// Starter text seeded repos haven't changed, which the clean graph leaves out.
+    private func seedTextNodes() -> Set<String> {
+        let unchanged = Seeds.unchangedText(root: source.rootPath, outDirectory: source.outDirectory)
+        guard !unchanged.isEmpty else { return [] }
+        let root = source.rootPath.hasSuffix("/") ? source.rootPath : source.rootPath + "/"
+        let paths = Set(unchanged.keys.flatMap { [$0, root + $0] })
+        let nodes = (try? index.nodeLines(inFiles: paths)) ?? []
+        return Seeds.hiddenNodes(nodes, unchanged: unchanged, root: source.rootPath)
     }
 
     /// Adds lines to `.graphifyignore`, skipping any already there. Only takes effect on the next build.
@@ -254,7 +266,7 @@ final class Workspace: @unchecked Sendable {
             communityLabel: node.communityLabel,
             isHidden: node.hidden,
             hidingRuleID: ruleID,
-            hidingRuleSummary: rule.map(Self.summary),
+            hidingRuleSummary: ruleID == RuleSet.seedTextRule ? "Starter text, unchanged since Graphitree seeded this repo" : rule.map(Self.summary),
             absolutePath: node.facts.path.isEmpty ? nil : source.existingPath(for: node.facts.path),
             neighbours: neighbours,
             neighbourTotal: total

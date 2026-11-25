@@ -689,7 +689,7 @@ struct NodeInspector: View {
                         .labelStyle(.iconOnly)
                         .help("Copy the file's path")
                     }
-                    if detail.isHidden, let rule = detail.hidingRuleID {
+                    if detail.isHidden, let rule = detail.hidingRuleID, rule != RuleSet.seedTextRule {
                         Button("Undo Rule", systemImage: "arrow.uturn.backward") { model.undo(ruleIDs: [rule]) }
                     } else if !detail.isHidden {
                         Button("Hide", systemImage: "eye.slash") {

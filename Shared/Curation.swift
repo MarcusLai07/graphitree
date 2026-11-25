@@ -225,6 +225,10 @@ final class RuleSet {
     private var hubs: [String: String] = [:]
     private var pairs: [String: String] = [:]
     private var pathCache: [String: String?] = [:]
+    /// Nodes of starter text a seeded repo hasn't changed (Seeds.unchangedText). Not a rule in the
+    /// log: it follows the files, so a node comes back as soon as the repo changes its text.
+    var seedNodes: Set<String> = []
+    static let seedTextRule = "seed-text"
 
     init(entries: [CurationEntry]) {
         let revoked = Set(entries.filter { $0.op == CurationEntry.Op.revoke }.compactMap(\.rule))
@@ -273,6 +277,7 @@ final class RuleSet {
     /// The rule hiding this node, if any.
     func hidingRule(for node: NodeFacts) -> String? {
         if let rule = nodes[node.id] { return rule }
+        if seedNodes.contains(node.id) { return Self.seedTextRule }
         if !node.path.isEmpty, let rule = pathRule(node.path) { return rule }
         if node.isConfigKey { return configLabels[node.labelKey] }
         return nil

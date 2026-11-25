@@ -174,6 +174,102 @@ struct PlaybookLibrary: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// A skill the playbook gives new repos, in the Agent Skills format most AI tools read:
+/// `.agents/skills/<name>/SKILL.md`, with only the standard's `name` and `description` up top.
+struct PlaybookSkill: Codable, Identifiable, Hashable, Sendable {
+    /// Which seeded repos get it.
+    enum Reach: String, Codable, CaseIterable, Identifiable, Sendable {
+        case everywhere, personal, repos
+
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .everywhere: return "Every new repo"
+            case .personal: return "Personal repos only"
+            case .repos: return "Only the repos named"
+            }
+        }
+    }
+
+    var id = UUID()
+    /// The folder name too: lowercase letters, digits and single hyphens, at most 64 characters.
+    var name: String
+    /// When to use it. Tools read this to decide whether to load the skill, so it says both what and when.
+    var description: String = ""
+    /// SKILL.md after the frontmatter.
+    var body: String = ""
+    /// Other files the skill needs, by their path inside its folder, such as `scripts/check.sh`.
+    var files: [SkillFile] = []
+    var reach: Reach = .everywhere
+    /// The projects it goes to when reach is .repos, such as `personal/kiln`.
+    var repos: [String] = []
+    /// Written for Claude Code alone: it goes in `.claude/skills/`, where other tools don't look.
+    var claudeOnly = false
+    /// Written by AI and not checked yet. Drafts aren't put in repos.
+    var drafted = false
+    /// The repo it was adopted from, such as `personal/kiln`, if any.
+    var source = ""
+
+    static let maxNameLength = 64
+    static let maxDescriptionLength = 1024
+    static let fileName = "SKILL.md"
+
+    /// The standard's rule for names: `pdf-tools`, not `PDF Tools`, `-pdf` or `pdf--tools`.
+    static func isValidName(_ name: String) -> Bool {
+        guard !name.isEmpty, name.count <= maxNameLength, !name.hasPrefix("-"), !name.hasSuffix("-"), !name.contains("--") else { return false }
+        return name.allSatisfy { ($0.isASCII && $0.isLowercase && $0.isLetter) || ($0.isASCII && $0.isNumber) || $0 == "-" }
+    }
+
+    /// A name typed as words, made into one: "Release Notes" becomes `release-notes`.
+    static func suggestedName(_ text: String) -> String {
+        let words = text.lowercased().map { ($0.isASCII && ($0.isLetter || $0.isNumber)) ? $0 : " " }
+        return String(String(words).split(separator: " ").joined(separator: "-").prefix(maxNameLength)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+
+    /// A path inside the skill's folder that's safe to write: relative, with no `..`, and not SKILL.md itself.
+    static func isValidFilePath(_ path: String) -> Bool {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard !path.isEmpty, !path.hasPrefix("/"), path != fileName else { return false }
+        return parts.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+    }
+
+    /// What's stopping it from going into repos, in words. Empty when it's ready.
+    var problems: [String] {
+        var found: [String] = []
+        if !Self.isValidName(name) { found.append("The name needs lowercase letters, digits and single hyphens, at most \(Self.maxNameLength) characters, such as release-notes.") }
+        let about = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        if about.isEmpty { found.append("It needs a description: what it does and when to use it.") }
+        if about.count > Self.maxDescriptionLength { found.append("The description is over \(Self.maxDescriptionLength) characters.") }
+        if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { found.append("It needs instructions.") }
+        if files.contains(where: { !Self.isValidFilePath($0.path) }) { found.append("Each extra file needs a path inside the skill's folder, such as scripts/check.sh.") }
+        return found
+    }
+
+    var isReady: Bool { problems.isEmpty && !drafted }
+
+    /// SKILL.md as a repo gets it.
+    var skillText: String {
+        let about = description.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+        let quoted = "\"" + about.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "---\nname: \(name)\ndescription: \(quoted)\n---\n\n\(text)\n"
+    }
+
+    /// Whether a repo gets it, by its path and its main folder's label.
+    func reaches(_ project: String, purpose: FolderPurpose?) -> Bool {
+        switch reach {
+        case .everywhere: return true
+        case .personal: return purpose?.id == FolderPurpose.personal.id
+        case .repos: return repos.contains(project)
+        }
+    }
+}
+
+struct SkillFile: Codable, Hashable, Sendable {
+    var path: String
+    var text: String
+}
+
 struct StackAnswer: Codable, Hashable, Sendable {
     var choices: [String] = []
     var notes: String = ""
@@ -194,6 +290,8 @@ struct Playbook: Codable, Equatable, Sendable {
     var folderStacks: [String: [String: StackAnswer]]?
     /// Rules that aren't about one library, in the owner's order.
     var rules: [PlaybookRule] = []
+    /// Skills new repos get, in the owner's order.
+    var skills: [PlaybookSkill] = []
 
     /// The stack for new work in a folder: its own answers where it has them, the rest from everywhere.
     func stack(for folder: String?) -> [String: StackAnswer] {
@@ -216,7 +314,7 @@ struct Playbook: Codable, Equatable, Sendable {
     var isEmpty: Bool {
         libraries.isEmpty && stack.values.allSatisfy(\.isEmpty)
             && habits.values.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            && rules.isEmpty
+            && rules.isEmpty && skills.isEmpty
     }
 
     /// Libraries grouped by task, tasks in alphabetical order with untitled ones last. Within a
@@ -358,6 +456,22 @@ extension PlaybookRule {
     }
 }
 
+extension PlaybookSkill {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = values.value(.id, or: UUID())
+        name = values.value(.name, or: "")
+        description = values.value(.description, or: "")
+        body = values.value(.body, or: "")
+        files = values.value(.files, or: [])
+        reach = values.value(.reach, or: .everywhere)
+        repos = values.value(.repos, or: [])
+        claudeOnly = values.value(.claudeOnly, or: false)
+        drafted = values.value(.drafted, or: false)
+        source = values.value(.source, or: "")
+    }
+}
+
 extension StackAnswer {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -396,6 +510,17 @@ extension Playbook {
             }
         }
         self.rules = rules
+        var skills: [PlaybookSkill] = []
+        if var list = try? values.nestedUnkeyedContainer(forKey: .skills) {
+            while !list.isAtEnd {
+                if let skill = try? list.decode(PlaybookSkill.self) {
+                    skills.append(skill)
+                } else if (try? list.decode(SkippedValue.self)) == nil {
+                    break
+                }
+            }
+        }
+        self.skills = skills
     }
 }
 
@@ -675,6 +800,29 @@ enum PlaybookFile {
             lines.append("## The owner's rules")
             lines.append("")
             lines.append(contentsOf: ownRules)
+        }
+
+        let skills = playbook.skills.filter { !$0.name.isEmpty }
+        if !skills.isEmpty {
+            lines.append("")
+            lines.append("## Skills")
+            lines.append("")
+            lines.append("Graphitree puts these in new repos that have no setup of their own, in `.agents/skills/<name>/SKILL.md`. Each repo owns its copy after that, so it may differ from this list.")
+            lines.append("")
+            for skill in skills {
+                var head = "- **\(skill.name)**"
+                var marks: [String] = []
+                if skill.drafted { marks.append("draft") }
+                if skill.claudeOnly { marks.append("Claude Code only") }
+                switch skill.reach {
+                case .everywhere: break
+                case .personal: marks.append("personal repos only")
+                case .repos: marks.append(skill.repos.isEmpty ? "no repos named yet" : "only in " + skill.repos.map { "`\($0)`" }.joined(separator: ", "))
+                }
+                if !marks.isEmpty { head += " *\(marks.joined(separator: ", "))*" }
+                let about = oneLine(skill.description)
+                lines.append(about.isEmpty ? head : "\(head): \(about)")
+            }
         }
 
         if !kept.isEmpty {
@@ -969,7 +1117,7 @@ enum PlaybookFile {
         return ".!?)".contains(last) && last != ")" ? trimmed : trimmed + "."
     }
 
-    private static func oneLine(_ text: String) -> String {
+    static func oneLine(_ text: String) -> String {
         text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
     }
 }

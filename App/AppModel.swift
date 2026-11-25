@@ -655,6 +655,57 @@ final class AppModel {
         return PlaybookFile.graphCopyIsNewer(than: builtAt, root: graphRoot)
     }
 
+    // MARK: - Starters
+
+    /// The coding tools a starter writes files for: Claude Code when it's on this Mac, and Gemini
+    /// CLI when it's connected. Every other tool reads AGENTS.md, which every starter has.
+    func starterTools() -> [String] {
+        let home = agentHome
+        var tools: [String] = []
+        if let claude = AICatalog.codingTools.first(where: { $0.id == Seeds.claudeCode }), ToolLocator.isInstalled(claude, home: home) {
+            tools.append(claude.id)
+        }
+        if let gemini = AICatalog.codingTools.first(where: { $0.id == Seeds.geminiCLI }), CodingToolState.read(gemini, home: home).isConnected {
+            tools.append(gemini.id)
+        }
+        return tools
+    }
+
+    func starterSurvey() -> Seeds.Survey {
+        _ = settingsRevision
+        return Seeds.survey(root: graphRoot, map: folderMap(), book: Seeds.load(from: outDirectory), moves: FolderMoves.load(from: outDirectory))
+    }
+
+    /// What a repo's starter would hold, from the playbook as it is now.
+    func starter(for repo: Seeds.Repo) -> [Seeds.Item] {
+        Seeds.starter(for: repo.path, root: graphRoot, purpose: repo.purpose, playbook: loadPlaybook(), tools: starterTools())
+    }
+
+    /// Writes a starter. Nothing that's there is overwritten, and nothing is committed.
+    func seed(_ repo: Seeds.Repo, items: [Seeds.Item]) -> Result<Seeds.WriteResult, Error> {
+        defer { settingsRevision += 1 }
+        return Result { try Seeds.write(items, project: repo.path, folder: repo.folder, tools: starterTools(), root: graphRoot, outDirectory: outDirectory) }
+    }
+
+    @discardableResult
+    func setStarterSkipped(_ project: String, _ skipped: Bool) -> String? {
+        do { try Seeds.setSkipped(project, skipped, in: outDirectory) } catch { return error.localizedDescription }
+        settingsRevision += 1
+        return nil
+    }
+
+    /// How a seeded repo's files compare with what Graphitree wrote.
+    func starterStatus(of project: String) -> [Seeds.FileStatus] {
+        let book = Seeds.load(from: outDirectory)
+        guard let found = Seeds.record(for: project, in: book, moves: FolderMoves.load(from: outDirectory)) else { return [] }
+        return Seeds.status(of: project, key: found.key, record: found.record, root: graphRoot, outDirectory: outDirectory)
+    }
+
+    /// Skills the graph's repos wrote for themselves.
+    func foundSkills() -> [Seeds.FoundSkill] {
+        Seeds.foundSkills(root: graphRoot, map: folderMap(), book: Seeds.load(from: outDirectory), moves: FolderMoves.load(from: outDirectory))
+    }
+
     // MARK: - Claude Code's memory
 
     /// Only for a root that holds projects, never inside one repo.

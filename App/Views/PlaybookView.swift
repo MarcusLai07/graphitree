@@ -61,6 +61,10 @@ struct PlaybookView: View {
     /// Which folder's stack the Stack tab edits. Empty means everywhere.
     @State private var stackScope = ""
     @State private var stackFolders: [String] = []
+    /// Repos that can get a starter, for the tab's title.
+    @State private var starterOffers = 0
+    /// Goes up with each save, so the Starters tab previews what's saved.
+    @State private var playbookRevision = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -69,7 +73,9 @@ struct PlaybookView: View {
             VStack(alignment: .leading, spacing: 12) {
                 summaryStrip
                 Picker("Section", selection: $tab) {
-                    ForEach(PlaybookTab.allCases) { Text($0.title).tag($0) }
+                    ForEach(PlaybookTab.allCases) { tab in
+                        Text(tab == .starters && starterOffers > 0 ? "\(tab.title) (\(starterOffers))" : tab.title).tag(tab)
+                    }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -92,6 +98,8 @@ struct PlaybookView: View {
                             case .chat: EmptyView()
                             case .libraries: librariesTab
                             case .rules: rulesTab
+                            case .skills: PlaybookSkillsTab(playbook: playbook, edit: edit)
+                            case .starters: PlaybookStartersTab(playbookRevision: playbookRevision) { starterOffers = $0 }
                             case .stack: stackTab
                             case .habits: habitsTab
                             case .storage: storageTab
@@ -1455,6 +1463,7 @@ struct PlaybookView: View {
             stackFolders = model.folderMap()?.folders.filter { $0.isIncluded && !$0.purpose.isDocs }.map(\.path).sorted() ?? source.scheme.groups.sorted()
         }
         addsToGraph = model.playbookAddsToGraph
+        starterOffers = model.starterSurvey().offers.count
         isLoaded = true
         if let raw = UserDefaults.standard.string(forKey: "playbookTab"), let start = PlaybookTab(rawValue: raw) { tab = start }
         // GraphitreeShots opens a library's card, or starts a review, with these.
@@ -1493,6 +1502,7 @@ struct PlaybookView: View {
     private func save() {
         guard let loadedFrom else { return }
         if let error = model.savePlaybook(playbook, in: loadedFrom) { message = "Couldn't save the playbook: \(error)" }
+        playbookRevision += 1
     }
 
     private func update(_ id: UUID, _ change: (inout PlaybookLibrary) -> Void) {
@@ -1657,7 +1667,7 @@ struct PlaybookView: View {
 }
 
 private enum PlaybookTab: String, CaseIterable, Identifiable {
-    case chat, libraries, rules, stack, habits, storage
+    case chat, libraries, rules, skills, starters, stack, habits, storage
 
     var id: String { rawValue }
     var title: String {
@@ -1665,6 +1675,8 @@ private enum PlaybookTab: String, CaseIterable, Identifiable {
         case .chat: return "Chat"
         case .libraries: return "Libraries"
         case .rules: return "Rules"
+        case .skills: return "Skills"
+        case .starters: return "Starters"
         case .stack: return "Stack"
         case .habits: return "How You Work"
         case .storage: return "Storage"
@@ -1675,6 +1687,8 @@ private enum PlaybookTab: String, CaseIterable, Identifiable {
         case .chat: return "Ask about libraries, your stack or how you work."
         case .libraries: return "Libraries you trust, filed by area and the job they do. AI tools use these instead of writing their own toast, drawer or command menu. Map shows the whole stack at a glance; List has every detail."
         case .rules: return "What AI tools should follow beyond any one library, such as \"One primitive system per app\". A rule filed under a category shows with that category's libraries."
+        case .skills: return "Skills new repos get, in the Agent Skills format: .agents/skills/<name>/SKILL.md for every tool, and a link in .claude/skills/ for Claude Code. Skills are only written into a repo with its starter."
+        case .starters: return "A starter for each repo with no setup of its own: an AGENTS.md from your rules and stack, a CLAUDE.md that imports it, and your skills. Written once, after you see it. The repo owns it from then on."
         case .stack: return "What new work should start from. Pick your defaults; existing projects keep what they use."
         case .habits: return "How you like to work, written once so every AI tool knows it. Like memory, but yours to edit. The Chat tab can also learn it from your recent sessions."
         case .storage: return "The playbook lives next to the guide, and a copy goes into the knowledge graph. Keep it on this Mac, or back it up to a private repo."

@@ -101,6 +101,35 @@ if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--memory" {
     exit(0)
 }
 
+// `--seeds <root>` prints which repos would be offered a starter and what it would hold, from the
+// saved playbook. Read-only: nothing is written into any repo.
+if (3...4).contains(CommandLine.arguments.count), CommandLine.arguments[1] == "--seeds" {
+    let root = CommandLine.arguments[2]
+    let outDirectory = URL(fileURLWithPath: root).appendingPathComponent("graphify-out")
+    let book = Seeds.load(from: outDirectory)
+    let survey = Seeds.survey(root: root, map: FolderFile.load(from: outDirectory), book: book, moves: FolderMoves.load(from: outDirectory))
+    let playbook = PlaybookFile.load(from: outDirectory)
+    // `--seeds <root> <project>` prints that project's AGENTS.md instead.
+    if CommandLine.arguments.count == 4 {
+        print(Seeds.agentsText(playbook: playbook, folder: String(CommandLine.arguments[3].split(separator: "/").first ?? "")), terminator: "")
+        exit(0)
+    }
+    for repo in survey.repos {
+        switch repo.state {
+        case .notSetUp:
+            let items = Seeds.starter(for: repo.path, root: root, purpose: repo.purpose, playbook: playbook, tools: [Seeds.claudeCode])
+            print("offer: \(repo.path): \(items.map(\.path).joined(separator: ", "))")
+        case .ownSetup(let markers): print("own setup: \(repo.path): \(markers.joined(separator: ", "))")
+        case .seeded(let record): print("seeded: \(repo.path) on \(PlaybookFile.day(record.seededAt))")
+        case .skipped: print("skipped: \(repo.path)")
+        }
+    }
+    print("shared, harvest only: \(survey.shared.count)")
+    print("no label: \(survey.unlabelled.joined(separator: ", "))")
+    print("skills found in repos: \(Seeds.foundSkills(root: root, map: FolderFile.load(from: outDirectory), book: book, moves: []).filter { !$0.isShared }.map(\.id).joined(separator: ", "))")
+    exit(0)
+}
+
 // `--scene <graphify-out>` prints each drill-down level of the largest branch, for renderer tests.
 if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--scene" {
     let cache = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -2232,6 +2261,7 @@ try backgroundAndRestoreChecks()
 try moveChecks()
 try memoryChecks()
 try memoryMoveChecks()
+try seedChecks()
 
 // MARK: - AI connections
 

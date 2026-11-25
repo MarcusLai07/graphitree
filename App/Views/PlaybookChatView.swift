@@ -274,6 +274,7 @@ struct PlaybookChatView: View {
         case .stack: return "square.stack.3d.up"
         case .habit: return "person.text.rectangle"
         case .rule: return "list.bullet.rectangle"
+        case .skill: return "wand.and.stars"
         }
     }
 
@@ -306,6 +307,9 @@ struct PlaybookChatView: View {
             guard let rule = change.rule else { return nil }
             if !rule.replaces.isEmpty, !rule.text.isEmpty { return "Replaces: \(rule.replaces)" }
             return rule.text.isEmpty ? nil : rule.category.isEmpty ? "Applies everywhere." : "For \(rule.category)."
+        case .skill:
+            guard let skill = change.skill else { return nil }
+            return skill.description.isEmpty ? "Saved as a draft to check." : skill.description + " Saved as a draft to check."
         }
     }
 
