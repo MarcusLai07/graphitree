@@ -11,7 +11,7 @@ settings:
     DEVELOPMENT_TEAM: P7DV5ZUK9A
     # Sparkle compares CFBundleVersion to find updates, so it follows the version.
     CURRENT_PROJECT_VERSION: $(MARKETING_VERSION)
-    MARKETING_VERSION: 0.6.1
+    MARKETING_VERSION: 0.6.2
 packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift
