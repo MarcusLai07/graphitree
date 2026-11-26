@@ -107,7 +107,8 @@ if (3...4).contains(CommandLine.arguments.count), CommandLine.arguments[1] == "-
     let root = CommandLine.arguments[2]
     let outDirectory = URL(fileURLWithPath: root).appendingPathComponent("graphify-out")
     let book = Seeds.load(from: outDirectory)
-    let survey = Seeds.survey(root: root, map: FolderFile.load(from: outDirectory), book: book, moves: FolderMoves.load(from: outDirectory))
+    let owners = Seeds.Owners.read()
+    let survey = Seeds.survey(root: root, map: FolderFile.load(from: outDirectory), book: book, moves: FolderMoves.load(from: outDirectory), owners: owners)
     let playbook = PlaybookFile.load(from: outDirectory)
     // `--seeds <root> <project>` prints that project's AGENTS.md instead.
     if CommandLine.arguments.count == 4 {
@@ -124,7 +125,9 @@ if (3...4).contains(CommandLine.arguments.count), CommandLine.arguments[1] == "-
         case .skipped: print("skipped: \(repo.path)")
         }
     }
+    print("logins: \(owners.logins.count), SSH aliases: \(owners.hostNames.count)")
     for repo in survey.shared {
+        if let account = repo.othersAccount { print("shared, pushes to \(account), not one of your logins: \(repo.path) (purpose \(repo.purpose?.title ?? "none"))") }
         switch repo.state {
         case .notSetUp: print("shared, by hand only: \(repo.path)")
         case .ownSetup: print("shared, own setup: \(repo.path)")

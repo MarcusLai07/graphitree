@@ -146,3 +146,46 @@ struct GitAccounts: Equatable, Sendable {
         loginByFolder.filter { $0.value == login }.map(\.key).sorted()
     }
 }
+
+/// Which host a remote reaches, through the owner's SSH aliases (`Host github-mine` with
+/// `HostName github.com` in ~/.ssh/config).
+enum GitHosts {
+    /// `github-mine` from `git@github-mine:Owner/x.git`, `github.com` from an HTTPS URL.
+    static func host(ofRemote remote: String) -> String? {
+        var text = remote
+        for prefix in ["https://", "http://", "ssh://", "git://"] where text.hasPrefix(prefix) { text.removeFirst(prefix.count) }
+        if let at = text.firstIndex(of: "@"), text[..<at].allSatisfy({ $0 != "/" }) { text = String(text[text.index(after: at)...]) }
+        let host = text.prefix { $0 != ":" && $0 != "/" }
+        return host.isEmpty ? nil : host.lowercased()
+    }
+
+    /// Each SSH alias's real host name, lowercased. Patterns with wildcards are skipped.
+    static func hostNames(sshConfig: String) -> [String: String] {
+        var result: [String: String] = [:]
+        var current: [String] = []
+        for raw in sshConfig.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+            let parts = line.split(maxSplits: 1, whereSeparator: { $0 == " " || $0 == "\t" || $0 == "=" })
+            guard parts.count == 2 else { continue }
+            let value = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: " \t=\""))
+            switch parts[0].lowercased() {
+            case "host": current = value.split(separator: " ").map { $0.lowercased() }.filter { !$0.contains("*") && !$0.contains("?") && !$0.hasPrefix("!") }
+            case "match": current = []
+            case "hostname": for alias in current where result[alias] == nil { result[alias] = value.lowercased() }
+            default: break
+            }
+        }
+        return result
+    }
+
+    static func readHostNames(home: String = NSHomeDirectory()) -> [String: String] {
+        hostNames(sshConfig: (try? String(contentsOfFile: (home as NSString).appendingPathComponent(".ssh/config"), encoding: .utf8)) ?? "")
+    }
+
+    /// Whether a remote is on GitHub, directly or through an SSH alias.
+    static func isGitHub(_ remote: String, hostNames: [String: String]) -> Bool {
+        guard let host = host(ofRemote: remote) else { return false }
+        return host == "github.com" || hostNames[host] == "github.com"
+    }
+}

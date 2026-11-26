@@ -26,8 +26,8 @@ func seedChecks() throws {
     }
 
     // The made-up root: kiln has nothing, ledger has its own CLAUDE.md, sketch isn't a repo,
-    // depot and quarry are in a shared folder (depot with skills of its own), and studio's main
-    // folder has no label.
+    // depot and quarry are in a folder whose purpose is shared (depot with skills of its own), and
+    // studio's main folder has no label.
     for name in ["personal/kiln", "personal/ledger", "work/depot", "work/quarry", "studio"] { try repo(name) }
     try manager.createDirectory(atPath: root + "/personal/sketch", withIntermediateDirectories: true)
     try write("personal/ledger/CLAUDE.md", "# ledger\n")
@@ -44,10 +44,10 @@ func seedChecks() throws {
     expectEqual(survey.repos.map(\.path), ["personal/kiln", "personal/ledger"], "starters: only git repos in folders that can get one are listed")
     expectEqual(survey.offers.map(\.path), ["personal/kiln"], "starters: a repo with nothing of its own is offered one, even with an empty skills folder")
     expectEqual(survey.repos.last?.state, .ownSetup(["CLAUDE.md", ".claude/skills"]), "starters: a CLAUDE.md or skills Graphitree didn't write mean the repo's own setup")
-    expectEqual(survey.shared.map(\.path), ["work/depot", "work/quarry"], "starters: a shared folder's repos are listed apart from the others")
-    expectEqual(survey.shared.first?.state, .ownSetup([".agents/skills"]), "starters: a shared folder's repo with its own setup is left alone")
-    expectEqual(survey.sharedOffers.map(\.path), ["work/quarry"], "starters: a shared folder's repo with nothing of its own can get one, but isn't counted as an offer")
-    check(survey.sharedOffers.first?.isNew == false, "starters: a shared folder's repo is never marked new")
+    expectEqual(survey.shared.map(\.path), ["work/depot", "work/quarry"], "starters: repos with a shared purpose are listed apart from the others")
+    expectEqual(survey.shared.first?.state, .ownSetup([".agents/skills"]), "starters: a shared repo with its own setup is left alone")
+    expectEqual(survey.sharedOffers.map(\.path), ["work/quarry"], "starters: a shared repo with nothing of its own can get one, but isn't counted as an offer")
+    check(survey.sharedOffers.first?.isNew == false, "starters: a shared repo is never marked new")
     expectEqual(survey.unlabelled, ["studio"], "starters: a main folder with no label isn't offered one")
     expectEqual(Seeds.survey(root: root, map: nil, book: Seeds.Book(), moves: []).repos, [], "starters: nothing is offered before folders are labelled")
 
@@ -191,12 +191,12 @@ func seedChecks() throws {
     let found = Seeds.foundSkills(root: root, map: map, book: Seeds.load(from: out), moves: [])
     expectEqual(found.map(\.id), ["personal/ledger/deploy", "work/depot/ship"], "found skills: the repos' own, not the seeded ones")
     expectEqual(found.first?.description, "Ships ledger to the \"staging\" box", "found skills: the description is read")
-    check(found.last?.isShared == true, "found skills: a shared folder's are marked")
+    check(found.last?.isShared == true, "found skills: a shared repo's are marked")
     let adopted = Seeds.adopt(found.last!)
-    check(adopted.drafted && adopted.body.isEmpty && adopted.description.isEmpty && adopted.source == "a shared folder", "found skills: from a shared folder only the name comes over")
+    check(adopted.drafted && adopted.body.isEmpty && adopted.description.isEmpty && adopted.source == "a shared repo", "found skills: from a shared repo only the name comes over")
     expectEqual(Seeds.adopt(found.first!).body, "Run the deploy script.", "found skills: a personal repo's comes over as a draft")
 
-    // A shared folder's repo, seeded by hand: its own folder's stack, no personal-only skills.
+    // A shared repo, seeded by hand: its own folder's stack, no personal-only skills.
     let quarry = Seeds.survey(root: root, map: map, book: Seeds.load(from: out), moves: []).sharedOffers[0]
     let quarryItems = Seeds.starter(for: quarry.path, root: root, purpose: quarry.purpose, playbook: playbook, tools: [Seeds.claudeCode], date: date)
     check(!quarryItems.contains { $0.path.contains("mac-icons") } && quarryItems.contains { $0.path.contains("release-notes") }, "shared: a skill for personal repos only stays out, one for every repo goes in")
@@ -205,6 +205,26 @@ func seedChecks() throws {
     survey = Seeds.survey(root: root, map: map, book: Seeds.load(from: out), moves: [])
     check(survey.shared.contains { if case .seeded = $0.state { return $0.path == "work/quarry" } else { return false } } && survey.sharedOffers.isEmpty, "shared: once written, it counts as seeded")
     expectEqual(Seeds.foundSkills(root: root, map: map, book: Seeds.load(from: out), moves: []).map(\.id), ["personal/ledger/deploy", "work/depot/ship"], "shared: its seeded skills aren't found as the repo's own")
+
+    // Whose a repo is: its purpose, and its remote. Never its folder's name.
+    check(GitHosts.host(ofRemote: "git@github-mine:someone/x.git") == "github-mine" && GitHosts.host(ofRemote: "https://user@github.com/someone/x.git") == "github.com", "owners: a remote's host")
+    let hostNames = GitHosts.hostNames(sshConfig: "Host github-mine github-other\n  HostName github.com\nHost *.example\n  HostName wild.example\n# Host old\nHost=lab\n  HostName=gitlab.com\n")
+    expectEqual(hostNames, ["github-mine": "github.com", "github-other": "github.com", "lab": "gitlab.com"], "owners: SSH aliases, without wildcard patterns or comments")
+    let owners = Seeds.Owners(logins: ["sample-owner"], hostNames: hostNames)
+    expectEqual(owners.othersAccount(ofRemote: "git@github-mine:Brightmill/anvil.git"), "Brightmill", "owners: a GitHub account that isn't one of the logins is someone else's")
+    expectEqual(owners.othersAccount(ofRemote: "https://github.com/SAMPLE-owner/anvil.git"), nil, "owners: one of the logins, in any case")
+    expectEqual(owners.othersAccount(ofRemote: "git@lab:Brightmill/anvil.git"), nil, "owners: a remote that isn't on GitHub tells nothing")
+    expectEqual(Seeds.Owners(hostNames: hostNames).othersAccount(ofRemote: "git@github-mine:Brightmill/anvil.git"), nil, "owners: with no logins, remotes tell nothing")
+    try repo("personal/anvil")
+    try write("personal/anvil/.git/config", "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = git@github-mine:Brightmill/anvil.git\n")
+    try repo("personal/bellows")
+    try write("personal/bellows/.git/config", "[remote \"origin\"]\n\turl = https://github.com/sample-owner/bellows.git\n")
+    survey = Seeds.survey(root: root, map: map, book: Seeds.load(from: out), moves: [], owners: owners)
+    let anvil = survey.shared.first { $0.path == "personal/anvil" }
+    check(anvil?.othersAccount == "Brightmill" && anvil?.purpose?.id == FolderPurpose.personal.id && anvil?.isNew == false && anvil?.isShared == true, "owners: a repo labelled Personal that pushes to someone else's account is shared, and never new")
+    check(survey.offers.contains { $0.path == "personal/bellows" } && !survey.offers.contains { $0.path == "personal/anvil" }, "owners: one that pushes to the person's own account stays theirs")
+    check(anvil.map { Seeds.starter(for: $0.path, root: root, purpose: $0.skillPurpose, playbook: playbook, tools: [], date: date) }?.contains { $0.path.contains("mac-icons") } == false, "owners: skills for personal repos only stay out of it")
+    check(Seeds.survey(root: root, map: map, book: Seeds.load(from: out), moves: []).offers.contains { $0.path == "personal/anvil" }, "owners: without them, the purpose alone decides")
 
     // The chat can draft a skill, saved as a draft.
     let reply = PlaybookChat.reply(from: ["reply": "Here.", "skills": [["name": "Test Runner", "description": "Runs the tests.", "body": "Run them.", "reason": "Asked"]]])

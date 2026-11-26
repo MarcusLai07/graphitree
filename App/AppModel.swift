@@ -671,14 +671,30 @@ final class AppModel {
         return tools
     }
 
-    func starterSurvey() -> Seeds.Survey {
+    /// The person's GitHub logins and SSH aliases, to tell from each repo's remote whose it is.
+    /// Read once per launch, off the main thread, since it asks gh.
+    @ObservationIgnored private var starterOwnersRead: Seeds.Owners?
+
+    func starterOwners() async -> Seeds.Owners {
+        if let starterOwnersRead { return starterOwnersRead }
+        let home = agentHome
+        let owners = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { continuation.resume(returning: Seeds.Owners.read(home: home)) }
+        }
+        starterOwnersRead = owners
+        return owners
+    }
+
+    /// Which repos can get a starter, each on its side by its purpose and its remote.
+    func starterSurvey() async -> Seeds.Survey {
+        let owners = await starterOwners()
         _ = settingsRevision
-        return Seeds.survey(root: graphRoot, map: folderMap(), book: Seeds.load(from: outDirectory), moves: FolderMoves.load(from: outDirectory))
+        return Seeds.survey(root: graphRoot, map: folderMap(), book: Seeds.load(from: outDirectory), moves: FolderMoves.load(from: outDirectory), owners: owners)
     }
 
     /// What a repo's starter would hold, from the playbook as it is now.
     func starter(for repo: Seeds.Repo) -> [Seeds.Item] {
-        Seeds.starter(for: repo.path, root: graphRoot, purpose: repo.purpose, playbook: loadPlaybook(), tools: starterTools())
+        Seeds.starter(for: repo.path, root: graphRoot, purpose: repo.skillPurpose, playbook: loadPlaybook(), tools: starterTools())
     }
 
     /// Writes a starter. Nothing that's there is overwritten, and nothing is committed.
@@ -702,8 +718,9 @@ final class AppModel {
     }
 
     /// Skills the graph's repos wrote for themselves.
-    func foundSkills() -> [Seeds.FoundSkill] {
-        Seeds.foundSkills(root: graphRoot, map: folderMap(), book: Seeds.load(from: outDirectory), moves: FolderMoves.load(from: outDirectory))
+    func foundSkills() async -> [Seeds.FoundSkill] {
+        let owners = await starterOwners()
+        return Seeds.foundSkills(root: graphRoot, map: folderMap(), book: Seeds.load(from: outDirectory), moves: FolderMoves.load(from: outDirectory), owners: owners)
     }
 
     // MARK: - Claude Code's memory

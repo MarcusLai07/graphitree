@@ -1463,7 +1463,7 @@ struct PlaybookView: View {
             stackFolders = model.folderMap()?.folders.filter { $0.isIncluded && !$0.purpose.isDocs }.map(\.path).sorted() ?? source.scheme.groups.sorted()
         }
         addsToGraph = model.playbookAddsToGraph
-        starterOffers = model.starterSurvey().offers.count
+        starterOffers = await model.starterSurvey().offers.count
         isLoaded = true
         if let raw = UserDefaults.standard.string(forKey: "playbookTab"), let start = PlaybookTab(rawValue: raw) { tab = start }
         // GraphitreeShots opens a library's card, or starts a review, with these.
