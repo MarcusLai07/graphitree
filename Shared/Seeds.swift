@@ -98,19 +98,52 @@ enum Seeds {
         let path: String
         /// The main folder, such as `personal`.
         let folder: String
+        /// What the person said it's for: its area in Arrange, else its main folder's label.
         let purpose: FolderPurpose?
         let state: State
         /// Made in the last two weeks, so most likely one the person just started.
         let isNew: Bool
+        /// The GitHub account its remote pushes to, when that isn't one of the person's logins:
+        /// someone else's code, whatever its purpose says.
+        var othersAccount: String? = nil
         var id: String { path }
+
+        /// Not only the person's: a shared purpose (Work, Client), or someone else's account.
+        var isShared: Bool { purpose?.isShared == true || othersAccount != nil }
+        /// The purpose skills go by. None for someone else's account, so skills for personal
+        /// repos only stay out of it.
+        var skillPurpose: FolderPurpose? { othersAccount == nil ? purpose : nil }
+    }
+
+    /// Whose a repo is by its remote: the person's GitHub logins, and their SSH aliases so
+    /// `github-mine` counts as GitHub. With no logins, nothing is told from remotes.
+    struct Owners: Equatable, Sendable {
+        var logins: [String] = []
+        var hostNames: [String: String] = [:]
+
+        /// The account a remote pushes to on GitHub, when it isn't one of these logins.
+        func othersAccount(ofRemote remote: String) -> String? {
+            guard !logins.isEmpty, GitHosts.isGitHub(remote, hostNames: hostNames), let owner = GitAccounts.owner(ofRemote: remote) else { return nil }
+            return logins.contains { $0.caseInsensitiveCompare(owner) == .orderedSame } ? nil : owner
+        }
+
+        /// The account a repo pushes to, when it isn't one of the person's.
+        func othersAccount(ofRepo path: String) -> String? {
+            FolderMoves.originURL(repo: path).flatMap(othersAccount(ofRemote:))
+        }
+
+        /// Runs `gh auth status`, so not on the main thread.
+        static func read(home: String = NSHomeDirectory()) -> Owners {
+            Owners(logins: PlaybookBackup.accounts(), hostNames: GitHosts.readHostNames(home: home))
+        }
     }
 
     struct Survey: Equatable, Sendable {
-        /// Repos in folders that can get a starter, in path order.
+        /// Repos that are only the person's and can get a starter, in path order.
         var repos: [Repo] = []
-        /// Repos in shared folders (Work, Client), in path order. Kept apart from the others: a
-        /// starter there would be committed where colleagues see it, so they're never counted
-        /// as offers or marked new, and the person previews one only if they mean to.
+        /// Repos that aren't only theirs (`Repo.isShared`), in path order. Kept apart from the
+        /// others: a starter there would be committed where others see it, so they're never
+        /// counted as offers or marked new, and the person previews one only if they mean to.
         var shared: [Repo] = []
         /// Repos whose main folder has no label yet, so it can't be told whether they're shared.
         var unlabelled: [String] = []
@@ -136,8 +169,8 @@ enum Seeds {
         }
     }
 
-    /// Whether a label's repos can get a starter at all: not notes, not someone else's code or the
-    /// archive. Shared folders' repos can, but are listed apart (see `Survey.shared`).
+    /// Whether a purpose's repos can get a starter at all: not notes, not someone else's code or
+    /// the archive. Shared ones can, but are listed apart (see `Survey.shared`).
     static func canSeed(_ purpose: FolderPurpose) -> Bool {
         !purpose.isDocs && purpose.id != FolderPurpose.reference.id && purpose.id != FolderPurpose.archive.id
     }
@@ -146,7 +179,9 @@ enum Seeds {
     /// projects has any: a single repo's own graph is that repo, and it has no folder labels.
     static let newFor: TimeInterval = 14 * 24 * 3600
 
-    static func survey(root: String, map: FolderMap?, book: Book, moves: [FolderMove], now: Date = .now) -> Survey {
+    /// Each repo's side comes from its purpose and, given `owners`, from its remote: never from a
+    /// folder's name.
+    static func survey(root: String, map: FolderMap?, book: Book, moves: [FolderMove], owners: Owners? = nil, now: Date = .now) -> Survey {
         var survey = Survey()
         guard let map else { return survey }
         let projectAreas = map.areasByProject
@@ -169,9 +204,10 @@ enum Seeds {
                 state = own.isEmpty ? .notSetUp : .ownSetup(own)
             }
             let made = (try? FileManager.default.attributesOfItem(atPath: (full as NSString).appendingPathComponent(".git")))?[.creationDate] as? Date
-            let isNew = !purpose.isShared && state == .notSetUp && made.map { now.timeIntervalSince($0) < newFor } == true
-            let repo = Repo(path: project, folder: folder, purpose: purpose, state: state, isNew: isNew)
-            if purpose.isShared { survey.shared.append(repo) } else { survey.repos.append(repo) }
+            let others = owners?.othersAccount(ofRepo: full)
+            let isNew = !purpose.isShared && others == nil && state == .notSetUp && made.map { now.timeIntervalSince($0) < newFor } == true
+            let repo = Repo(path: project, folder: folder, purpose: purpose, state: state, isNew: isNew, othersAccount: others)
+            if repo.isShared { survey.shared.append(repo) } else { survey.repos.append(repo) }
         }
         return survey
     }
@@ -569,7 +605,7 @@ extension Seeds {
         let name: String
         let description: String
         let body: String
-        /// From a shared folder (Work, Client): only offered in a review of the whole graph, and
+        /// From a repo that isn't only the person's (`Repo.isShared`): only offered in a review of the whole graph, and
         /// only its name comes over, so no text from that repo reaches a starter.
         let isShared: Bool
         var id: String { project + "/" + name }
@@ -579,7 +615,7 @@ extension Seeds {
 
     /// Skills in the graph's repos that Graphitree didn't put there, by project then name. A skill
     /// linked into two folders counts once.
-    static func foundSkills(root: String, map: FolderMap?, book: Book, moves: [FolderMove]) -> [FoundSkill] {
+    static func foundSkills(root: String, map: FolderMap?, book: Book, moves: [FolderMove], owners: Owners? = nil) -> [FoundSkill] {
         guard let map else { return [] }
         let areas = map.areasByProject
         var found: [FoundSkill] = []
@@ -590,6 +626,7 @@ extension Seeds {
             let seeded = record(for: project, in: book, moves: moves)?.record
             let ours = Set((seeded?.files ?? []).map(skillFolder(of:)) + (seeded?.links ?? []))
             let repo = (root as NSString).appendingPathComponent(project)
+            let isShared = purpose.isShared || owners?.othersAccount(ofRepo: repo) != nil
             var names = Set<String>()
             for base in foundSkillFolders {
                 let folderPath = (repo as NSString).appendingPathComponent(base)
@@ -598,7 +635,7 @@ extension Seeds {
                           let text = try? String(contentsOfFile: (folderPath as NSString).appendingPathComponent("\(name)/\(PlaybookSkill.fileName)"), encoding: .utf8) else { continue }
                     names.insert(name)
                     let parsed = parseSkill(text)
-                    found.append(FoundSkill(project: project, name: parsed.name.isEmpty ? name : parsed.name, description: parsed.description, body: parsed.body, isShared: purpose.isShared))
+                    found.append(FoundSkill(project: project, name: parsed.name.isEmpty ? name : parsed.name, description: parsed.description, body: parsed.body, isShared: isShared))
                 }
             }
         }
@@ -626,12 +663,12 @@ extension Seeds {
         return (fields["name"] ?? "", fields["description"] ?? "", lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// A found skill as a playbook draft. One from a shared folder brings only its name: the
+    /// A found skill as a playbook draft. One from a shared repo brings only its name: the
     /// owner, or the chat, writes a generic version before it can go anywhere.
     static func adopt(_ found: FoundSkill) -> PlaybookSkill {
         var skill = PlaybookSkill(name: PlaybookSkill.isValidName(found.name) ? found.name : PlaybookSkill.suggestedName(found.name))
         skill.drafted = true
-        skill.source = found.isShared ? "a shared folder" : found.project
+        skill.source = found.isShared ? "a shared repo" : found.project
         if !found.isShared {
             skill.description = found.description
             skill.body = found.body

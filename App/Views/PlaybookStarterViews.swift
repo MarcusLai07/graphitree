@@ -30,7 +30,7 @@ struct PlaybookSkillsTab: View {
             }
             foundSection
         }
-        .task { found = model.foundSkills() }
+        .task { found = await model.foundSkills() }
     }
 
     private var summary: String {
@@ -197,7 +197,7 @@ struct PlaybookSkillsTab: View {
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(own) { foundRow($0, isKnown: known.contains($0.name)) }
                 if !shared.isEmpty {
-                    Toggle("Include \(shared.count) from shared folders, for a review of the whole graph", isOn: $includesShared)
+                    Toggle("Include \(shared.count) from shared repos, for a review of the whole graph", isOn: $includesShared)
                         .font(.caption)
                     if includesShared {
                         Text("Only the name comes over: write a generic version before it can go into a repo.")
@@ -216,7 +216,7 @@ struct PlaybookSkillsTab: View {
                 HStack(spacing: 6) {
                     Text(skill.name).font(.callout.monospaced())
                     Text(skill.project).font(.caption).foregroundStyle(.secondary)
-                    if skill.isShared { mark("shared folder") }
+                    if skill.isShared { mark("shared repo") }
                 }
                 if !skill.description.isEmpty, !skill.isShared {
                     Text(skill.description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -248,6 +248,8 @@ struct PlaybookStartersTab: View {
     var offersChanged: (Int) -> Void = { _ in }
 
     @State private var survey = Seeds.Survey()
+    /// Whether gh gave any logins, so remotes could be checked too.
+    @State private var checksRemotes = true
     @State private var isLoaded = false
     @State private var previewing: Seeds.Repo?
     @State private var opened: String?
@@ -265,14 +267,14 @@ struct PlaybookStartersTab: View {
                     .font(.callout).foregroundStyle(.secondary)
             } else {
                 group("Can get a starter", detail: "No instructions or skills of their own yet.", repos: survey.offers) { offerRow($0) }
-                group("In shared folders", detail: "Nothing of their own yet. Colleagues see whatever you commit here.", repos: survey.sharedOffers) { offerRow($0) }
+                group("Shared with others", detail: "Nothing of their own yet. Others see whatever you commit here.", repos: survey.sharedOffers) { offerRow($0) }
                 group("Seeded", detail: "Graphitree wrote their starter once and won't touch it again.", repos: seeded) { seededRow($0) }
                 group("Their own setup", detail: "Left alone.", repos: own) { ownRow($0) }
                 group("Skipped", detail: "", repos: skipped) { skippedRow($0) }
                 footer
             }
         }
-        .task(id: playbookRevision) { reload() }
+        .task(id: playbookRevision) { await reload() }
         .sheet(item: $previewing) { repo in
             StarterPreview(repo: repo, items: model.starter(for: repo)) { items in
                 previewing = nil
@@ -283,10 +285,10 @@ struct PlaybookStartersTab: View {
         }
     }
 
-    /// Every repo, shared folders' included, in path order.
+    /// Every repo, shared ones included, in path order.
     private var all: [Seeds.Repo] { (survey.repos + survey.shared).sorted { $0.path < $1.path } }
     private var seeded: [Seeds.Repo] { all.filter { if case .seeded = $0.state { return true } else { return false } } }
-    /// Shared folders' repos with their own setup are only counted in the footer.
+    /// Shared repos with their own setup are only counted in the footer.
     private var own: [Seeds.Repo] { survey.repos.filter(hasOwnSetup) }
     private var skipped: [Seeds.Repo] { all.filter { $0.state == .skipped } }
 
@@ -294,10 +296,16 @@ struct PlaybookStartersTab: View {
         if case .ownSetup = repo.state { return true } else { return false }
     }
 
-    private func reload() {
-        survey = model.starterSurvey()
+    private func reload() async {
+        survey = await model.starterSurvey()
+        checksRemotes = !(await model.starterOwners().logins.isEmpty)
         offersChanged(survey.offers.count)
         isLoaded = true
+    }
+
+    private func setSkipped(_ repo: Seeds.Repo, _ skipped: Bool) {
+        message = model.setStarterSkipped(repo.path, skipped)
+        Task { await reload() }
     }
 
     private func write(_ repo: Seeds.Repo, items: [Seeds.Item]) {
@@ -310,7 +318,7 @@ struct PlaybookStartersTab: View {
         case .failure(let error):
             message = "Couldn't write the starter: \(error.localizedDescription)"
         }
-        reload()
+        Task { await reload() }
     }
 
     @ViewBuilder
@@ -330,12 +338,13 @@ struct PlaybookStartersTab: View {
     private func offerRow(_ repo: Seeds.Repo) -> some View {
         HStack(spacing: 8) {
             Text(repo.path).font(.callout.monospaced())
+            side(repo)
             if repo.isNew {
                 Text("New")
                     .help("Made in the last two weeks").font(.caption2.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 2).background(Palette.gold, in: Capsule()).foregroundStyle(.black)
             }
             Spacer()
-            Button("Skip") { message = model.setStarterSkipped(repo.path, true) }.controlSize(.small)
+            Button("Skip") { setSkipped(repo, true) }.controlSize(.small)
             Button("Preview…") { previewing = repo }.controlSize(.small)
         }
     }
@@ -350,6 +359,7 @@ struct PlaybookStartersTab: View {
                 HStack(spacing: 8) {
                     Image(systemName: isOpen ? "chevron.down" : "chevron.right").font(.caption).foregroundStyle(.secondary).frame(width: 10)
                     Text(repo.path).font(.callout.monospaced())
+                    side(repo)
                     if case .seeded(let record) = repo.state {
                         Text(PlaybookFile.day(record.seededAt)).font(.caption).foregroundStyle(.secondary)
                     }
@@ -366,6 +376,7 @@ struct PlaybookStartersTab: View {
     private func ownRow(_ repo: Seeds.Repo) -> some View {
         HStack(spacing: 8) {
             Text(repo.path).font(.callout.monospaced())
+            side(repo)
             Spacer()
             if case .ownSetup(let markers) = repo.state {
                 Text(markers.prefix(3).joined(separator: ", ") + (markers.count > 3 ? " and \(markers.count - 3) more" : ""))
@@ -375,18 +386,40 @@ struct PlaybookStartersTab: View {
     }
 
     private func skippedRow(_ repo: Seeds.Repo) -> some View {
-        HStack {
+        HStack(spacing: 8) {
             Text(repo.path).font(.callout.monospaced())
+            side(repo)
             Spacer()
-            Button("Offer Again") { message = model.setStarterSkipped(repo.path, false) }.controlSize(.small)
+            Button("Offer Again") { setSkipped(repo, false) }.controlSize(.small)
         }
+    }
+
+    /// The repo's purpose, and the account it pushes to when that isn't one of the person's.
+    private func side(_ repo: Seeds.Repo) -> some View {
+        HStack(spacing: 4) {
+            if let purpose = repo.purpose {
+                Circle().fill(Palette.series(purpose.colorSlot)).frame(width: 6, height: 6)
+                Text(purpose.title)
+                    .help("Its purpose: its area in Arrange, else its main folder's label in Folders.")
+            }
+            if let account = repo.othersAccount {
+                Text("· pushes to \(account)")
+                    .foregroundStyle(Palette.gold)
+                    .help("Its remote is on GitHub under \(account), which isn't one of your signed-in accounts, so it counts as shared.")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 
     @ViewBuilder
     private var footer: some View {
         let sharedOwn = survey.shared.filter(hasOwnSetup).count
         let notes = [
-            sharedOwn == 0 ? nil : "\(sharedOwn) repo\(sharedOwn == 1 ? "" : "s") in shared folders (Work, Client) \(sharedOwn == 1 ? "has" : "have") a setup of \(sharedOwn == 1 ? "its" : "their") own: read into the knowledge base, left alone.",
+            "A repo's side comes from its purpose, never its folder's name" + (checksRemotes
+                ? ", and from its remote: one that pushes to a GitHub account that isn't yours counts as shared."
+                : ". Sign in to the GitHub command (gh) to check remotes too: then one that pushes to an account that isn't yours counts as shared."),
+            sharedOwn == 0 ? nil : "\(sharedOwn) shared repo\(sharedOwn == 1 ? " has" : "s have") a setup of \(sharedOwn == 1 ? "its" : "their") own: read into the knowledge base, left alone.",
             survey.unlabelled.isEmpty ? nil : "\(survey.unlabelled.count) repo\(survey.unlabelled.count == 1 ? " is" : "s are") in folders with no label yet. Label them in Folders to see them here.",
         ].compactMap { $0 }
         ForEach(notes, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
@@ -447,9 +480,9 @@ private struct StarterPreview: View {
             Text("Starter for \(repo.path)").font(.title3.weight(.semibold))
             Text("Written once and never changed by Graphitree again. Nothing that's already there is touched, and nothing is committed. If this repo is public, these files will be too once you commit them.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if repo.purpose?.isShared == true {
+            if repo.isShared {
                 Label {
-                    Text("\(repo.folder) is a shared folder (\(repo.purpose?.title ?? "")). Once you commit these files, everyone with access to this repo sees them: your rules, your stack for \(repo.folder), and the lines about asking your knowledge base, which only work where Graphitree is installed. Read AGENTS.md first, and after writing, take out anything that shouldn't be there before you commit.")
+                    Text(sharedWarning)
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "person.2")
@@ -485,7 +518,17 @@ private struct StarterPreview: View {
             }
         }
         .padding(20)
-        .frame(width: 640, height: repo.purpose?.isShared == true ? 680 : 600)
+        .frame(width: 640, height: repo.isShared ? 680 : 600)
+    }
+
+    private var sharedWarning: String {
+        let why: String
+        if let account = repo.othersAccount {
+            why = "This repo pushes to \(account) on GitHub, which isn't one of your accounts, so it counts as shared" + (repo.purpose.map { " even though its purpose is \($0.title)" } ?? "") + "."
+        } else {
+            why = "Its purpose is \(repo.purpose?.title ?? "a shared one"), which you share with others."
+        }
+        return why + " Once you commit these files, everyone with access to the repo sees them: your rules, your stack for \(repo.folder)/, and the lines about asking your knowledge base, which only work where Graphitree is installed. Read AGENTS.md first, and after writing, take out anything that shouldn't be there before you commit."
     }
 
     private func icon(_ item: Seeds.Item) -> String {
